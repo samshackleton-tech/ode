@@ -175,7 +175,7 @@ theorem heldIds_mem {facts : List Row} {f : String} {keys : List Key} : ∀ {l :
       next =>
         obtain ⟨k', m, same⟩ := heldIds_mem h
         exact ⟨k', List.mem_cons_of_mem _ m, same⟩
-    | load _ _ _ | or _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ =>
+    | load _ _ _ | or _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ | termVal _ _ =>
       simp only [heldIds] at h
       obtain ⟨k', m, same⟩ := heldIds_mem h
       exact ⟨k', List.mem_cons_of_mem _ m, same⟩
@@ -197,7 +197,7 @@ theorem heldBytes_mem {facts : List Row} {f : String} {keys : List Key} : ∀ {l
       next =>
         obtain ⟨k', m, same⟩ := heldBytes_mem h
         exact ⟨k', List.mem_cons_of_mem _ m, same⟩
-    | load _ _ _ | or _ _ _ | held _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ =>
+    | load _ _ _ | or _ _ _ | held _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ | termVal _ _ =>
       simp only [heldBytes] at h
       obtain ⟨k', m, same⟩ := heldBytes_mem h
       exact ⟨k', List.mem_cons_of_mem _ m, same⟩
@@ -221,7 +221,7 @@ theorem Known.within_mono {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {T : List 
   | held f keys ids => obtain ⟨d, hd, hlen, hev⟩ := h; exact ⟨d, hd, hlen, evalSpec_mono _ B hev _ hb⟩
   | heldB f keys ids => obtain ⟨d, hd, hlen, hev⟩ := h; exact ⟨d, hd, hlen, evalSpec_mono _ B hev _ hb⟩
   | use f keys u => obtain ⟨d, hd, hlen, hev⟩ := h; exact ⟨d, hd, hlen, evalSpec_mono _ B hev _ hb⟩
-  | load _ _ _ | or _ _ _ | div _ _ _ | block _ _ _ _ | record _ _ _ | word32 _ _ => trivial
+  | load _ _ _ | or _ _ _ | div _ _ _ | block _ _ _ _ | record _ _ _ | word32 _ _ | termVal _ _ => trivial
 
 theorem Known.within_of_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {T : List Node} {k : Known}
     (hpv : ctx.contract.preVals ctx.defs s0) (h : k.holds ctx s0 ρ T) : ∃ B, k.within ctx s0 ρ T B := by
@@ -229,7 +229,7 @@ theorem Known.within_of_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {T : L
   | held f keys ids => obtain ⟨d, hd, hlen, fuel, hev⟩ := h hpv; exact ⟨fuel, d, hd, hlen, hev⟩
   | heldB f keys ids => obtain ⟨d, hd, hlen, fuel, hev⟩ := h hpv; exact ⟨fuel, d, hd, hlen, hev⟩
   | use f keys u => obtain ⟨d, hd, hlen, fuel, hev⟩ := h hpv; exact ⟨fuel, d, hd, hlen, hev⟩
-  | load _ _ _ | or _ _ _ | div _ _ _ | block _ _ _ _ | record _ _ _ | word32 _ _ => exact ⟨0, trivial⟩
+  | load _ _ _ | or _ _ _ | div _ _ _ | block _ _ _ _ | record _ _ _ | word32 _ _ | termVal _ _ => exact ⟨0, trivial⟩
 
 /-- Every use of a definition that the state holds the words of, or the bytes of, or has given a number: the
 definition gives that within `B` steps. -/
@@ -266,7 +266,7 @@ theorem usedAs_mem {facts : List Row} {f : String} {keys : List Key} : ∀ {l : 
       next =>
         obtain ⟨k', m, same⟩ := usedAs_mem h
         exact ⟨k', List.mem_cons_of_mem _ m, same⟩
-    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | record _ _ _ | word32 _ _ =>
+    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | record _ _ _ | word32 _ _ | termVal _ _ =>
       simp only [usedAs] at h
       obtain ⟨k', m, same⟩ := usedAs_mem h
       exact ⟨k', List.mem_cons_of_mem _ m, same⟩
@@ -654,7 +654,7 @@ theorem knownBlock_mem {facts : List Row} {j c : Nat} {off : Row} : ∀ {l : Lis
       next =>
         obtain ⟨o, m, hs⟩ := knownBlock_mem h
         exact ⟨o, List.mem_cons_of_mem _ m, hs⟩
-    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ =>
+    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ | termVal _ _ =>
       simp only [knownBlock] at h
       obtain ⟨o, m, hs⟩ := knownBlock_mem h
       exact ⟨o, List.mem_cons_of_mem _ m, hs⟩
@@ -1131,16 +1131,45 @@ theorem atomId_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {r : Row} {i : N
     rw [di, ev_word]
   | none =>
     simp only [h1] at h
-    cases hd : divided s r W32i with
-    | none => simp [hd] at h
-    | some q =>
-      simp only [hd, Option.bind_some] at h
-      have di := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf h
-      simp only [Node.value] at di
-      have ⟨_, hrem⟩ := divided_spec H (by decide : (0 : Int) < W32i) hd
-      have hvar : ev ρ (Lin.var (q + 1)) = ev ρ r % W32i := by rw [ev_var]; exact hrem
-      have hmod : (ev ρ r % W32i) % W32i = ev ρ r % W32i := Int.emod_emod _ _
-      rw [di, hvar, hmod]
+    cases htv : ((if (Lin.word r).constant == 0 then varIdx (Lin.word r).coeff 0 else none).bind (fun v => knownVarTerm v s.known)) with
+    | some j =>
+      simp only [htv] at h
+      split at h
+      next hlt =>
+        injection h with h; subst h
+        have hc0 : (Lin.word r).constant = 0 := by
+          cases hc : ((Lin.word r).constant == 0) with
+          | true => exact beq_iff_eq.mp hc
+          | false => simp [hc] at htv
+        simp only [hc0, beq_self_eq_true, ↓reduceIte] at htv
+        cases hvi : varIdx (Lin.word r).coeff 0 with
+        | none => simp [hvi] at htv
+        | some v =>
+          simp only [hvi, Option.bind_some] at htv
+          have hm := knownVarTerm_mem htv
+          have hho := H.known _ hm
+          have hd := varIdx_dot (Lin.word r).coeff 0 v ρ hvi
+          have ew : ev ρ (Lin.word r) = ρ v := by
+            show Arithmetic.dot (Lin.word r).coeff ρ + (Lin.word r).constant = ρ v
+            rw [hc0, Int.add_zero]; simpa using hd
+          have hdn_lt := den_lt (ρ := ρ) wf.words.table (inpOf_lt ctx s0) wf.words.rotrs j
+          rw [← ev_word ρ r, ew, hho]
+          have : ((den (inpOf ctx s0) ρ s.terms j : Int) % W32i) = (den (inpOf ctx s0) ρ s.terms j : Int) :=
+            Int.emod_eq_of_lt (Int.natCast_nonneg _) (by unfold W32 W32i at *; omega)
+          rw [this, Int.toNat_natCast]
+      next => cases h
+    | none =>
+      simp only [htv] at h
+      cases hd : divided s r W32i with
+      | none => simp [hd] at h
+      | some q =>
+        simp only [hd, Option.bind_some] at h
+        have di := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf h
+        simp only [Node.value] at di
+        have ⟨_, hrem⟩ := divided_spec H (by decide : (0 : Int) < W32i) hd
+        have hvar : ev ρ (Lin.var (q + 1)) = ev ρ r % W32i := by rw [ev_var]; exact hrem
+        have hmod : (ev ρ r % W32i) % W32i = ev ρ r % W32i := Int.emod_emod _ _
+        rw [di, hvar, hmod]
 
 /-- The high word of a counter that is a number and a number of the text more: what `hiPlus` finds is it. -/
 theorem hiPlus_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {r : Row} {i : Nat}
@@ -2078,7 +2107,7 @@ theorem knownRec_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st
         obtain ⟨fs0, hdec, hrf⟩ := hkh _ (List.mem_cons_self ..) hpv
         rw [hdec, recMatches_sound H wf hm hd hrf]
       next => exact knownRec_sound H wf hpv (fun k' m => hkh k' (List.mem_cons_of_mem _ m)) hk hd
-    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | word32 _ _ =>
+    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | word32 _ _ | termVal _ _ =>
       simp only [knownRec] at hk
       exact knownRec_sound H wf hpv (fun k' m => hkh k' (List.mem_cons_of_mem _ m)) hk hd
 

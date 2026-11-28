@@ -22,7 +22,7 @@ theorem symStmt_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   | vset _ _ => exact symVset_sound E bind h H wf base u
   | vset512 _ _ => exact symVset512_sound E bind h H wf base u
   | nothing | ret | retLink _ | call _ | callLink _ _ | jump _ _ | set _ _ =>
-    exact symStmt_scalar E bind h H wf base u (fun _ _ e => by cases e) (fun _ _ e => by cases e)
+    exact symStmt_scalar E (symLoadWordScalar_sound E) (symStore4_sound E) bind h H wf base u (fun _ _ e => by cases e) (fun _ _ e => by cases e)
       (fun a x h8 H8 wf8 hw8 ha8 sx8 => symStore8_sound E a x h8 H8 wf8 hw8 ha8 sx8)
 
 /-- What the verifier holds of a state speaks of its registers, flags, memory and vector registers, and of
@@ -2303,7 +2303,10 @@ theorem symStmt_nonflag_flags {ctx : Ctx} {bind : Bind} {s s1 : Sym} {stmt : Stm
                     dsimp only at h
                     split at h
                     · have := V.pure_ok h; injection this with h _; subst h; exact f123
-                    · exact (refuse_ok h).elim
+                    · split at h
+                      · have f4 := symStore4_flags h
+                        exact ⟨f4.1.trans f123.1, f4.2.trans f123.2⟩
+                      · exact (refuse_ok h).elim
                   | out w o =>
                     dsimp only at h
                     cases hg : ctx.contract.outs[w]? <;> simp only [hg] at h
@@ -2320,7 +2323,10 @@ theorem symStmt_nonflag_flags {ctx : Ctx} {bind : Bind} {s s1 : Sym} {stmt : Stm
                       · split at h
                         · have f4 := symStore8_flags h
                           exact ⟨f4.1.trans f123.1, f4.2.trans f123.2⟩
-                        · exact (refuse_ok h).elim
+                        · split at h
+                          · have f4 := symStore4_flags h
+                            exact ⟨f4.1.trans f123.1, f4.2.trans f123.2⟩
+                          · exact (refuse_ok h).elim
                   | region _ _ | data _ => exact (refuse_ok h).elim
                 | none =>
                   simp only [hloc] at h

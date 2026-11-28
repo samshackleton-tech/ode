@@ -274,7 +274,7 @@ class Verify(unittest.TestCase):
                 ("eight bytes that end past the record", "mov r8, qword ptr [rsi + 112]", "mov r8, qword ptr [rsi + 113]", NOT_WITHIN),
                 ("eight bytes after the record", "mov rdx, qword ptr [rsi + 104]", "mov rdx, qword ptr [rsi + 120]", NOT_WITHIN),
                 ("eight bytes before the record", "mov rcx, qword ptr [rsi + 96]", "mov rcx, qword ptr [rsi - 8]", NOT_WITHIN),
-                ("eight bytes of the run given to write", "mov rcx, qword ptr [rsi + 96]", "mov rcx, qword ptr [rdi + 8]", "refused: a read of a run given only to write"),
+                ("eight bytes of the run given to write", "mov rcx, qword ptr [rsi + 96]", "mov rcx, qword ptr [rdi + 8]", ARGS),
                 ("eight bytes at an address that is no run's", "mov rcx, qword ptr [rsi + 96]", "mov rcx, qword ptr [rdx + 96]", NO_RUN),
                 # the record may end where memory ends: its address and 121 need not be an address
                 ("the record's address moved past the record", "add rsi, 32", "add rsi, 121", "need entail")):

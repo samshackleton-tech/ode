@@ -64,6 +64,378 @@ theorem wAtom_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t 
   step_of_made ok (wAtom_made (t' := (wAtom r t).2) (i := (wAtom r t).1) rfl ok.wf)
     (fun r' e => by injection e with e; rw [← e]; exact bounded_word hb) (fun a k e => by cases e)
 
+theorem knownTermVal_mem {id : Nat} : ∀ {ks : List Known} {v : Nat}, knownTermVal id ks = some v → Known.termVal v id ∈ ks
+  | [], _, h => by simp [knownTermVal] at h
+  | k :: rest, v, h => by
+    cases k with
+    | termVal v' id' =>
+      simp only [knownTermVal] at h
+      split at h
+      next he =>
+        injection h with hv; subst hv he
+        exact List.mem_cons_self ..
+      next => exact List.mem_cons_of_mem _ (knownTermVal_mem h)
+    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ =>
+      simp only [knownTermVal] at h
+      exact List.mem_cons_of_mem _ (knownTermVal_mem h)
+
+theorem knownVarTerm_mem {v : Nat} : ∀ {ks : List Known} {id : Nat}, knownVarTerm v ks = some id → Known.termVal v id ∈ ks
+  | [], _, h => by simp [knownVarTerm] at h
+  | k :: rest, id, h => by
+    cases k with
+    | termVal v' id' =>
+      simp only [knownVarTerm] at h
+      split at h
+      next he =>
+        injection h with hi; subst hi he
+        exact List.mem_cons_self ..
+      next => exact List.mem_cons_of_mem _ (knownVarTerm_mem h)
+    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ =>
+      simp only [knownVarTerm] at h
+      exact List.mem_cons_of_mem _ (knownVarTerm_mem h)
+
+private theorem inpOf_lt_vec (ctx : Ctx) (s0 : State) (j k : Nat) : inpOf ctx s0 j k < W32 := by
+  unfold inpOf
+  cases h : ctx.contract.wordRuns[j]? with
+  | none => simp only [W32]; decide
+  | some x =>
+    simp only
+    have hl := load_lt s0.mem (s0.reg x.2.1 + 4 * k) 4
+    have h4 : (256 : Nat) ^ 4 = W32 := by decide
+    rw [← h4]; exact hl
+
+theorem load4_of_bytes_vec (mem : Nat → Byte) (a v : Nat) (hv : v < 4294967296)
+    (h : ∀ bb, bb < 4 → (mem (a + bb)).val = v / 256 ^ bb % 256) : load mem a 4 = v := by
+  have h0 := h 0 (by decide)
+  have h1 := h 1 (by decide)
+  have h2 := h 2 (by decide)
+  have h3 := h 3 (by decide)
+  simp only [Nat.add_zero, Nat.pow_zero, Nat.div_one, Nat.pow_one, Nat.reducePow] at h0 h1 h2 h3
+  simp only [load, Nat.add_assoc, Nat.reduceAdd, h0, h1, h2, h3]
+  omega
+
+private theorem emod_toNat_add (a b : Int) :
+    ((a + b) % W32i).toNat = ((a % W32i).toNat + (b % W32i).toNat) % W32 := by
+  have ha0 := Int.emod_nonneg a (by decide : W32i ≠ 0)
+  have ha1 := Int.emod_lt_of_pos a (by decide : (0 : Int) < W32i)
+  have hb0 := Int.emod_nonneg b (by decide : W32i ≠ 0)
+  have hb1 := Int.emod_lt_of_pos b (by decide : (0 : Int) < W32i)
+  rw [Int.add_emod]
+  unfold W32 W32i at *
+  omega
+
+private theorem mod_merge3 {m a a' b r : Nat} (h1 : m % W32 = (a' + b) % W32) (h2 : a' % W32 = a % W32) :
+    (a % W32 + (b + r) % W32) % W32 = (m + r) % W32 := by
+  rw [← Nat.add_mod, Nat.add_mod m r, h1, Nat.add_mod a' b, h2, ← Nat.add_mod a b, ← Nat.add_mod (a + b) r, Nat.add_assoc]
+
+private theorem splitTermCoeffs_spec {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {known : List Known} {t : Tab}
+    (hw : WFT t.list) (hkn : ∀ v id, knownVarTerm v known = some id → id < t.list.length ∧ ρ v = (den (inpOf ctx s0) ρ t.list id : Int)) :
+    ∀ (cs : List Int) (k : Nat),
+      let r := splitTermCoeffs known t cs k
+      (∀ j ∈ r.2.1.map Prod.fst, j < t.list.length) ∧
+      r.2.2.length = cs.length ∧
+      (Arithmetic.dot cs (fun i => ρ (k + i)) % W32i).toNat =
+        (sumTerms (den (inpOf ctx s0) ρ t.list) r.2.1 + (Arithmetic.dot r.2.2 (fun i => ρ (k + i)) % W32i).toNat) % W32
+  | [], k => by
+    simp only [splitTermCoeffs, List.map_nil, List.not_mem_nil, false_implies, implies_true,
+      List.length_nil, Arithmetic.dot, sumTerms, Nat.add_zero, true_and]
+    rfl
+  | c :: cs, k => by
+    have ih := splitTermCoeffs_spec hw hkn cs (k + 1)
+    cases hres : splitTermCoeffs known t cs (k + 1) with
+    | mk p p2 =>
+      cases p2 with
+      | mk ts rem =>
+        simp only [hres] at ih
+        obtain ⟨ih_lt, ih_len, ih_eq⟩ := ih
+        have shift_dot : ∀ (l : List Int), Arithmetic.dot l (fun i => ρ (k + (i + 1))) = Arithmetic.dot l (fun i => ρ (k + 1 + i)) := by
+          intro l; apply congrArg (Arithmetic.dot l); funext i; congr 1; omega
+        simp only [splitTermCoeffs, hres]
+        have hcm_eq : ((c % W32i).toNat : Int) = c % W32i := by
+          have := Int.emod_nonneg c (by decide : W32i ≠ 0); omega
+        have hcm_lt : (c % W32i).toNat < W32 := by
+          have := Int.emod_lt_of_pos c (by decide : (0 : Int) < W32i); unfold W32 W32i at *; omega
+        have keep_case : (∀ j ∈ ts.map Prod.fst, j < t.list.length) ∧ (c :: rem).length = (c :: cs).length ∧
+            (Arithmetic.dot (c :: cs) (fun i => ρ (k + i)) % W32i).toNat =
+              (sumTerms (den (inpOf ctx s0) ρ t.list) ts + (Arithmetic.dot (c :: rem) (fun i => ρ (k + i)) % W32i).toNat) % W32 := by
+          refine ⟨ih_lt, by simp [ih_len], ?_⟩
+          simp only [Arithmetic.dot, Nat.add_zero, shift_dot]
+          rw [emod_toNat_add, emod_toNat_add, ih_eq]
+          rw [Nat.add_mod _ ((_ + _) % W32), Nat.mod_mod, ← Nat.add_mod]
+          rw [Nat.add_mod (sumTerms _ ts), Nat.mod_mod, ← Nat.add_mod, Nat.add_left_comm]
+        split
+        next hcm =>
+          cases hkv : knownVarTerm k known with
+          | none => simp only [hkv]; exact keep_case
+          | some id =>
+            simp only [hkv]
+            split
+            next hid =>
+              have hid' : id < t.list.length := by
+                show id < t.arr.toList.length
+                rw [Array.length_toList]; exact hid
+              obtain ⟨_, hρk⟩ := hkn k id hkv
+              have hadd_lt : ∀ j ∈ (if (c % W32i).toNat == 1 then addends t id else [(id, (c % W32i).toNat)]).map Prod.fst, j < t.list.length := by
+                cases h1 : ((c % W32i).toNat == 1) with
+                | true => simp only [h1, ↓reduceIte]; exact (addends_spec (inp := inpOf ctx s0) (ρ := ρ) hw hid').2
+                | false => simp only [h1, Bool.false_eq_true, ↓reduceIte]; intro j mj; simp at mj; subst mj; exact hid'
+              have hadd_sum : sumTerms (den (inpOf ctx s0) ρ t.list) (if (c % W32i).toNat == 1 then addends t id else [(id, (c % W32i).toNat)]) % W32 =
+                  ((c % W32i).toNat * den (inpOf ctx s0) ρ t.list id) % W32 := by
+                cases h1 : ((c % W32i).toNat == 1) with
+                | true =>
+                  simp only [h1, ↓reduceIte]
+                  have heq : (c % W32i).toNat = 1 := by simpa using h1
+                  rw [heq, Nat.one_mul]
+                  exact (addends_spec (inp := inpOf ctx s0) (ρ := ρ) hw hid').1
+                | false =>
+                  simp only [h1, Bool.false_eq_true, ↓reduceIte, sumTerms, Nat.add_zero]
+              refine ⟨fun j mj => (mem_mergeAdd mj).elim (hadd_lt j) (ih_lt j), by simp [ih_len], ?_⟩
+              simp only [Arithmetic.dot, Nat.add_zero, Int.zero_mul, Int.zero_add, shift_dot]
+              have hprod : ((c * ρ k) % W32i).toNat = ((c % W32i).toNat * den (inpOf ctx s0) ρ t.list id) % W32 := by
+                let cm := (c % W32i).toNat
+                let dn := den (inpOf ctx s0) ρ t.list id
+                have h1 : (c * ρ k) % W32i = ((cm * dn) % W32 : Nat) := by
+                  rw [hρk, Int.mul_emod, ← hcm_eq]
+                  show (cm : Int) * ((dn : Int) % (W32 : Nat)) % (W32 : Nat) = ((cm * dn % W32 : Nat) : Int)
+                  rw [← Int.natCast_emod, ← Int.natCast_mul, ← Int.natCast_emod]
+                  congr 1
+                  rw [Nat.mul_mod, Nat.mod_mod, ← Nat.mul_mod]
+                rw [h1]; exact Int.toNat_natCast _
+              rw [emod_toNat_add, hprod, ih_eq]
+              exact mod_merge3 (sumTerms_mergeAdd _ _ _) hadd_sum
+            next => exact keep_case
+        next hcm =>
+          have hcm0 : c % W32i = 0 := by
+            have h0 : (c % W32i).toNat = 0 := by simpa using hcm
+            have := Int.emod_nonneg c (by decide : W32i ≠ 0); omega
+          refine ⟨ih_lt, by simp [ih_len], ?_⟩
+          simp only [Arithmetic.dot, Nat.add_zero, Int.zero_mul, Int.zero_add, shift_dot]
+          have hc0 : (c * ρ k) % W32i = 0 := by rw [Int.mul_emod, hcm0, Int.zero_mul, Int.zero_emod]
+          have hdot : (c * ρ k + Arithmetic.dot cs (fun i => ρ (k + 1 + i))) % W32i =
+              Arithmetic.dot cs (fun i => ρ (k + 1 + i)) % W32i := by
+            rw [Int.add_emod, hc0, Int.zero_add, Int.emod_emod]
+          rw [hdot]
+          exact ih_eq
+
+theorem knownDivRem_mem {v : Nat} : ∀ {ks : List Known} {x : Row}, knownDivRem v ks = some x → ∃ q, q + 1 = v ∧ Known.div x W32i q ∈ ks
+  | [], _, h => by simp [knownDivRem] at h
+  | k :: rest, x, h => by
+    cases k with
+    | div x' m q =>
+      simp only [knownDivRem] at h
+      split at h
+      next hm =>
+        injection h with hx; subst hx
+        simp only [Bool.and_eq_true, beq_iff_eq] at hm
+        obtain ⟨hm1, hm2⟩ := hm
+        subst hm1
+        exact ⟨q, hm2, List.mem_cons_self ..⟩
+      next =>
+        obtain ⟨q', hq, m'⟩ := knownDivRem_mem h
+        exact ⟨q', hq, List.mem_cons_of_mem _ m'⟩
+    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ | termVal _ _ =>
+      simp only [knownDivRem] at h
+      obtain ⟨q', hq, m'⟩ := knownDivRem_mem h
+      exact ⟨q', hq, List.mem_cons_of_mem _ m'⟩
+
+private theorem sumTerms_ext {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T T' : List Node}
+    (hw : WFT T) (he : Ext T T') : ∀ (xs : List (Nat × Nat)), (∀ j ∈ xs.map Prod.fst, j < T.length) →
+    sumTerms (den inp ρ T') xs = sumTerms (den inp ρ T) xs
+  | [], _ => rfl
+  | (j, c) :: xs, hlt => by
+    simp only [sumTerms]
+    rw [den_ext hw he (hlt j (by simp)), sumTerms_ext hw he xs (fun k mk => hlt k (by simp [mk]))]
+
+private def resolveDivRem (known : List Known) (r : Row) : Row :=
+  let w0 := Lin.word r
+  match (if w0.constant == 0 then varIdx w0.coeff 0 else none).bind (fun v => knownDivRem v known) with
+  | some x => x
+  | none => r
+
+private theorem resolveDivRem_sound {ρ : Nat → Int} {nv : Nat} {known : List Known} {r : Row}
+    (hb : bounded nv r)
+    (hdiv : ∀ v x, knownDivRem v known = some x → bounded nv x ∧ ρ v = ev ρ x % W32i) :
+    bounded nv (resolveDivRem known r) ∧ ev ρ (resolveDivRem known r) % W32i = ev ρ r % W32i := by
+  unfold resolveDivRem
+  dsimp only
+  cases hx : ((if (Lin.word r).constant == 0 then varIdx (Lin.word r).coeff 0 else none).bind fun v => knownDivRem v known) with
+  | none => exact ⟨hb, rfl⟩
+  | some x =>
+    cases hc : ((Lin.word r).constant == 0) with
+    | false => simp [hc] at hx
+    | true =>
+      have hc0 : (Lin.word r).constant = 0 := beq_iff_eq.mp hc
+      simp only [hc, ↓reduceIte] at hx
+      cases hvi : varIdx (Lin.word r).coeff 0 with
+      | none => simp [hvi] at hx
+      | some v =>
+        simp only [hvi, Option.bind_some] at hx
+        obtain ⟨hbx, hρv⟩ := hdiv v x hx
+        have hdot := varIdx_dot (Lin.word r).coeff 0 v ρ hvi
+        have ew : ev ρ (Lin.word r) = ρ v := by
+          show Arithmetic.dot (Lin.word r).coeff ρ + (Lin.word r).constant = ρ v
+          rw [hc0, Int.add_zero]; simpa using hdot
+        exact ⟨hbx, by rw [← ev_word ρ r, ew, hρv, Int.emod_emod]⟩
+
+theorem wAtomK_step {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {nv : Nat} {known : List Known} {t : Tab} {r : Row}
+    (ok : TableOk nv t.list) (hb : bounded nv r)
+    (hkn : ∀ v id, knownVarTerm v known = some id → id < t.list.length ∧ ρ v = (den (inpOf ctx s0) ρ t.list id : Int))
+    (hdiv : ∀ v x, knownDivRem v known = some x → bounded nv x ∧ ρ v = ev ρ x % W32i) :
+    Step (inpOf ctx s0) ρ nv t.list (wAtomK known r t).2.list (wAtomK known r t).1 (ev ρ r % W32i).toNat := by
+  let r' := resolveDivRem known r
+  have hr' : bounded nv r' ∧ ev ρ r' % W32i = ev ρ r % W32i := resolveDivRem_sound hb hdiv
+  have hbw : bounded nv (Lin.word r') := bounded_word hr'.1
+  have hevw : ev ρ (Lin.word r') % W32i = ev ρ r % W32i := (ev_word ρ r').trans hr'.2
+  have hspec := splitTermCoeffs_spec ok.wf hkn (Lin.word r').coeff 0
+  unfold wAtomK
+  dsimp only
+  change Step (inpOf ctx s0) ρ nv t.list
+    (let sp := splitTermCoeffs known t (Lin.word r').coeff 0
+     if !sp.1 then wAtom r t
+     else
+       let remRow : Row := ⟨Lin.strip sp.2.2, (Lin.word r').constant⟩
+       if remRow == Lin.const 0 then
+         match sp.2.1 with
+         | [] => wAtom (Lin.const 0) t
+         | [(id, 1)] => (id, t)
+         | _ => intern (.add sp.2.1) t
+       else
+         let (rid, t1) := wAtom remRow t
+         if sp.2.1.isEmpty then (rid, t1)
+         else intern (.add (mergeAdd [(rid, 1)] sp.2.1)) t1).2.list
+    (let sp := splitTermCoeffs known t (Lin.word r').coeff 0
+     if !sp.1 then wAtom r t
+     else
+       let remRow : Row := ⟨Lin.strip sp.2.2, (Lin.word r').constant⟩
+       if remRow == Lin.const 0 then
+         match sp.2.1 with
+         | [] => wAtom (Lin.const 0) t
+         | [(id, 1)] => (id, t)
+         | _ => intern (.add sp.2.1) t
+       else
+         let (rid, t1) := wAtom remRow t
+         if sp.2.1.isEmpty then (rid, t1)
+         else intern (.add (mergeAdd [(rid, 1)] sp.2.1)) t1).1
+    (ev ρ r % W32i).toNat
+  dsimp only
+  cases hsp : splitTermCoeffs known t (Lin.word r').coeff 0 with
+  | mk pulled p2 =>
+    cases p2 with
+    | mk ts rem =>
+      simp only [hsp] at hspec ⊢
+      obtain ⟨ts_lt, rem_len, dot_eq⟩ := hspec
+      have hdot0 : Arithmetic.dot (Lin.word r').coeff (fun i => ρ (0 + i)) = Arithmetic.dot (Lin.word r').coeff ρ := by
+        apply congrArg (Arithmetic.dot (Lin.word r').coeff); funext i; simp
+      have hdotR : Arithmetic.dot rem (fun i => ρ (0 + i)) = Arithmetic.dot rem ρ := by
+        apply congrArg (Arithmetic.dot rem); funext i; simp
+      rw [hdot0, hdotR] at dot_eq
+      let remRow : Row := ⟨Lin.strip rem, (Lin.word r').constant⟩
+      have hbRem : bounded nv remRow := Nat.le_trans (strip_length _) (by rw [rem_len]; exact hbw)
+      have hevRem : ev ρ remRow = Arithmetic.dot rem ρ + (Lin.word r').constant := by
+        show Arithmetic.dot (Lin.strip rem) ρ + (Lin.word r').constant = _
+        rw [dot_strip]
+      have hevFull : (ev ρ r % W32i).toNat =
+          (sumTerms (den (inpOf ctx s0) ρ t.list) ts + (ev ρ remRow % W32i).toNat) % W32 := by
+        rw [← hevw]
+        have e1 : ev ρ (Lin.word r') = Arithmetic.dot (Lin.word r').coeff ρ + (Lin.word r').constant := rfl
+        have h1 := Int.add_emod (Arithmetic.dot (Lin.word r').coeff ρ) (Lin.word r').constant W32i
+        have h2 := Int.add_emod (Arithmetic.dot rem ρ) (Lin.word r').constant W32i
+        have a0 := Int.emod_nonneg (Arithmetic.dot (Lin.word r').coeff ρ) (by decide : W32i ≠ 0)
+        have a1 := Int.emod_lt_of_pos (Arithmetic.dot (Lin.word r').coeff ρ) (by decide : (0 : Int) < W32i)
+        have b0 := Int.emod_nonneg (Arithmetic.dot rem ρ) (by decide : W32i ≠ 0)
+        have b1 := Int.emod_lt_of_pos (Arithmetic.dot rem ρ) (by decide : (0 : Int) < W32i)
+        have c0 := Int.emod_nonneg (Lin.word r').constant (by decide : W32i ≠ 0)
+        have c1 := Int.emod_lt_of_pos (Lin.word r').constant (by decide : (0 : Int) < W32i)
+        rw [e1, hevRem, h1, h2]
+        unfold W32 W32i at *
+        omega
+      cases pulled with
+      | false => exact wAtom_step ok hb
+      | true =>
+        simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+        split
+        next hrem0 =>
+          have hre : remRow = Lin.const 0 := by simpa [remRow] using hrem0
+          have hre0 : (ev ρ remRow % W32i).toNat = 0 := by rw [hre, ev_const]; rfl
+          rw [hre0, Nat.add_zero] at hevFull
+          cases ts with
+          | nil =>
+            simp only [sumTerms, Nat.zero_mod] at hevFull
+            have s0' := wAtom_step (inp := inpOf ctx s0) (ρ := ρ) (t := t) ok (bounded_const nv 0)
+            simpa [hevFull, ev_const] using s0'
+          | cons p ps =>
+            cases ps with
+            | nil =>
+              cases p with
+              | mk id c =>
+                cases c with
+                | zero =>
+                  have m := made (inp := inpOf ctx s0) (ρ := ρ) (n := .add [(id, 0)]) (t := t) rfl ok.wf ts_lt
+                  have st := step_of_made ok m (fun _ e => by cases e) (fun _ _ e => by cases e)
+                  rw [hevFull]; simpa [Node.value] using st
+                | succ c' =>
+                  cases c' with
+                  | zero =>
+                    have hid : id < t.list.length := ts_lt id (by simp)
+                    have hdn_lt := den_lt (ρ := ρ) ok.wf (inpOf_lt_vec ctx s0) ok.rotrs id
+                    rw [hevFull]
+                    simp only [sumTerms, Nat.zero_add, Nat.one_mul, Nat.add_zero]
+                    rw [Nat.mod_eq_of_lt hdn_lt]
+                    exact ⟨Ext.refl _, ok, hid, rfl⟩
+                  | succ c'' =>
+                    have m := made (inp := inpOf ctx s0) (ρ := ρ) (n := .add [(id, c'' + 2)]) (t := t) rfl ok.wf ts_lt
+                    have st := step_of_made ok m (fun _ e => by cases e) (fun _ _ e => by cases e)
+                    rw [hevFull]; simpa [Node.value] using st
+            | cons q qs =>
+              have m := made (inp := inpOf ctx s0) (ρ := ρ) (n := .add (p :: q :: qs)) (t := t) rfl ok.wf ts_lt
+              have st := step_of_made ok m (fun _ e => by cases e) (fun _ _ e => by cases e)
+              rw [hevFull]; simpa [Node.value] using st
+        next =>
+          have s1 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ) (t := t) ok hbRem
+          split
+          next hts0 =>
+            have hts : ts = [] := by simpa using hts0
+            subst hts
+            simp only [sumTerms, Nat.zero_add] at hevFull
+            have hmod : (ev ρ remRow % W32i).toNat < W32 := by
+              have := Int.emod_lt_of_pos (ev ρ remRow) (by decide : (0 : Int) < W32i); unfold W32 W32i at *; omega
+            rw [Nat.mod_eq_of_lt hmod] at hevFull
+            rw [hevFull]; exact s1
+          next =>
+            have hp : ∀ j ∈ (Node.add (mergeAdd [((wAtom remRow t).1, 1)] ts)).parts, j < (wAtom remRow t).2.list.length := by
+              intro j mj
+              simp only [Node.parts] at mj
+              rcases mem_mergeAdd mj with mj | mj
+              · simp at mj; subst mj; exact s1.lt
+              · exact Nat.lt_of_lt_of_le (ts_lt j mj) s1.ext.le
+            have m := made (inp := inpOf ctx s0) (ρ := ρ) (n := .add (mergeAdd [((wAtom remRow t).1, 1)] ts))
+              (t := (wAtom remRow t).2) rfl s1.ok.wf hp
+            have s2 := step_of_made s1.ok m (fun _ e => by cases e) (fun _ _ e => by cases e)
+            have hsum_ext := sumTerms_ext (inp := inpOf ctx s0) (ρ := ρ) ok.wf s1.ext ts ts_lt
+            refine ⟨s1.ext.trans s2.ext, s2.ok, s2.lt, ?_⟩
+            rw [s2.den]
+            simp only [Node.value]
+            rw [sumTerms_mergeAdd, hsum_ext]
+            simp only [sumTerms, Nat.one_mul, Nat.add_zero, s1.den]
+            rw [hevFull, Nat.add_comm]
+
+theorem wAtomK_step_of {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} {t : Tab} {r : Row}
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (he : Ext s.terms t.list)
+    (ok : TableOk s.nvars t.list) (hb : bounded s.nvars r) :
+    Step (inpOf ctx s0) ρ s.nvars t.list (wAtomK s.known r t).2.list (wAtomK s.known r t).1 (ev ρ r % W32i).toNat := by
+  apply wAtomK_step ok hb
+  · intro v id hkv
+    have hm := knownVarTerm_mem hkv
+    have hwf := wf.known _ hm
+    have hho := H.known _ hm
+    exact ⟨Nat.lt_of_lt_of_le hwf.2 he.le, by rw [den_ext wf.words.table he hwf.2]; exact hho⟩
+  · intro v x hkd
+    obtain ⟨q, hq, hm⟩ := knownDivRem_mem hkd
+    have hwf := wf.known _ hm
+    have hho := H.known _ hm (by decide : (0 : Int) < W32i)
+    subst hq
+    exact ⟨hwf.1, hho.2⟩
+
 theorem wAdd_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a b : Nat} (ok : TableOk nv t.list)
     (ha : a < t.list.length) (hb : b < t.list.length) :
     Step inp ρ nv t.list (wAdd a b t).2.list (wAdd a b t).1 ((den inp ρ t.list a + den inp ρ t.list b) % W32) :=
@@ -564,6 +936,106 @@ theorem framePairRows_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym
             refine ⟨by omega, by omega, ?_⟩
             simpa [List.getD] using m3
 
+theorem knownLoadOf_mem {v : Nat} : ∀ {ks : List Known} {p : Nat × Nat}, knownLoadOf v ks = some p → Known.load v p.1 p.2 ∈ ks
+  | [], _, h => by simp [knownLoadOf] at h
+  | k :: rest, p, h => by
+    cases k with
+    | load v' j c0 =>
+      simp only [knownLoadOf] at h
+      split at h
+      next heq => injection h with hp; subst heq hp; exact List.mem_cons_self ..
+      next => exact List.mem_cons_of_mem _ (knownLoadOf_mem h)
+    | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ | termVal _ _ =>
+      simp only [knownLoadOf] at h
+      exact List.mem_cons_of_mem _ (knownLoadOf_mem h)
+
+theorem frameCellNodes_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
+    {o : Int} {lo hi : Node} (h : frameCellNodes s o = some (lo, hi)) :
+    -(ctx.contract.stackAt s0 : Int) ≤ o ∧ o + 8 ≤ 0 ∧
+    (∃ j k, lo = .input j k ∧ load st.mem ((s0.reg RSP : Int) + o).toNat 4 = inpOf ctx s0 j k) ∧
+    (∃ j k, hi = .input j k ∧ load st.mem (((s0.reg RSP : Int) + o).toNat + 4) 4 = inpOf ctx s0 j k) := by
+  have h4 : (256 : Nat) ^ 4 = 4294967296 := by decide
+  unfold frameCellNodes at h
+  cases hf : s.frame.find? (fun cell => cell.1 == o) with
+  | none => simp [hf] at h
+  | some cell =>
+    obtain ⟨o', x⟩ := cell
+    simp only [hf] at h
+    cases hc0 : (x.constant == 0) with
+    | false => simp [hc0] at h
+    | true =>
+      have hx0 : x.constant = 0 := beq_iff_eq.mp hc0
+      simp only [hc0, ↓reduceIte] at h
+      cases hvi : varIdx x.coeff 0 with
+      | none => simp [hvi] at h
+      | some v =>
+        simp only [hvi, Option.bind_some] at h
+        cases hkl : knownLoadOf v s.known with
+        | none => simp [hkl] at h
+        | some jc =>
+          obtain ⟨j, c0⟩ := jc
+          simp only [hkl] at h
+          split at h
+          next hm4 =>
+            simp only [Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            have hm := List.mem_of_find?_eq_some hf
+            have ho : o' = o := by have := List.find?_some hf; simpa using this
+            subst ho
+            obtain ⟨g1, g2, g3⟩ := H.frame _ _ hm
+            have hdot := varIdx_dot x.coeff 0 v ρ hvi
+            have hevx : ev ρ x = ρ v := by
+              show Arithmetic.dot x.coeff ρ + x.constant = ρ v
+              rw [hx0, Int.add_zero]; simpa using hdot
+            obtain ⟨xn, r, n, hfj, hcn, hρv⟩ := H.known _ (knownLoadOf_mem hkl)
+            have hjj : (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? = some (xn, r, n) := by
+              rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp hfj).1]; exact hfj
+            have hwr := wordRuns_of hjj
+            have heq8 : load st.mem ((s0.reg RSP : Int) + o').toNat 8 = load s0.mem (s0.reg r + c0) 8 :=
+              Int.ofNat.inj (g3.trans (hevx.trans hρv))
+            have e1 := load_halves_vec st.mem ((s0.reg RSP : Int) + o').toNat
+            have e2 := load_halves_vec s0.mem (s0.reg r + c0)
+            have lt1 := load_lt st.mem ((s0.reg RSP : Int) + o').toNat 4
+            have lt2 := load_lt s0.mem (s0.reg r + c0) 4
+            rw [h4] at lt1 lt2
+            have hi_eq : load st.mem (((s0.reg RSP : Int) + o').toNat + 4) 4 = load s0.mem (s0.reg r + c0 + 4) 4 := by omega
+            have lo_eq : load st.mem ((s0.reg RSP : Int) + o').toNat 4 = load s0.mem (s0.reg r + c0) 4 := by omega
+            have hc0_eq : 4 * (c0 / 4) = c0 := by omega
+            have hc1_eq : 4 * (c0 / 4 + 1) = c0 + 4 := by omega
+            refine ⟨g1, g2, ⟨j, c0 / 4, rfl, ?_⟩, ⟨j, c0 / 4 + 1, rfl, ?_⟩⟩
+            · unfold inpOf; rw [hwr, hc0_eq]; exact lo_eq
+            · unfold inpOf; rw [hwr, hc1_eq]; simpa only [Nat.add_assoc] using hi_eq
+          next => simp at h
+
+theorem framePairNodes_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} (H : Holds ctx s0 ρ s st)
+    (hst : ctx.contract.stackAt s0 ≤ s0.reg RSP) :
+    ∀ pairs (o : Int) {nodes : List Node}, framePairNodes s o pairs = some nodes →
+      nodes.length = 2 * pairs ∧
+      ∀ k, k < 2 * pairs → -(ctx.contract.stackAt s0 : Int) ≤ o + 4 * (k : Int) ∧ o + 4 * (k : Int) + 4 ≤ 0 ∧
+        ∃ j idx, nodes.getD k (.input 0 0) = .input j idx ∧ load st.mem (((s0.reg RSP : Int) + o).toNat + 4 * k) 4 = inpOf ctx s0 j idx
+  | 0, _, _, h => by simp only [framePairNodes, Option.some.injEq] at h; subst h; exact ⟨rfl, fun _ hk => by omega⟩
+  | pairs + 1, o, _, h => by
+    unfold framePairNodes at h
+    cases hc : frameCellNodes s o with
+    | none => simp [hc] at h
+    | some lh =>
+      obtain ⟨lo, hi⟩ := lh
+      cases hr : framePairNodes s (o + 8) pairs with
+      | none => simp [hc, hr] at h
+      | some rest =>
+        simp only [hc, hr, Option.some.injEq] at h; subst h
+        obtain ⟨g1, g2, hlo, hhi⟩ := frameCellNodes_sound H hc
+        obtain ⟨rlen, rmem⟩ := framePairNodes_sound H hst pairs (o + 8) hr
+        refine ⟨by simp [rlen]; omega, fun k hk => ?_⟩
+        match k with
+        | 0 => exact ⟨by omega, by omega, by simpa using hlo⟩
+        | 1 => exact ⟨by omega, by omega, by simpa using hhi⟩
+        | k + 2 =>
+          obtain ⟨m1, m2, j, idx, hn, hmem⟩ := rmem k (by omega)
+          have e1 : ((s0.reg RSP : Int) + (o + 8)).toNat + 4 * k = ((s0.reg RSP : Int) + o).toNat + 4 * (k + 2) := by omega
+          rw [e1] at hmem
+          exact ⟨by omega, by omega, j, idx, by simpa [List.getD] using hn, hmem⟩
+
 theorem frameWIds_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym}
     (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hstack : ctx.contract.stackAt s0 ≤ s0.reg RSP) :
     ∀ (count k : Nat) (o : Int) {ids : List Nat}, frameWIds s.frameW o count k = some ids →
@@ -652,8 +1124,9 @@ private theorem symLoadValArray_sound {ctx : Ctx} {p : Program} {s0 : State} (E 
           pure (made.1, { s with tab := made.2 })
         else refuse (if width = 4 then "sixteen bytes that are not four words of the run"
                      else if width = 1 then "four bytes that are not a word of the run"
+                     else if width = 2 then "eight bytes that are not two words of the run"
                      else "sixty-four bytes that are not sixteen words of the run")
-      | none => refuse s!"{if width = 4 then "sixteen" else if width = 1 then "four" else "sixty-four"} bytes that are of no run of words given to read") items = .ok ((l, s1), rest)) :
+      | none => refuse s!"{if width = 4 then "sixteen" else if width = 1 then "four" else if width = 2 then "eight" else "sixty-four"} bytes that are of no run of words given to read") items = .ok ((l, s1), rest)) :
     allowed (ctx.contract.perm ctx.pieces s0).read a (4 * width) = true ∧ Carried ctx s0 ρ s ρ s1 st ∧ l.length = width ∧
     (∀ i ∈ l, i < s1.terms.length) ∧
     ∀ k, k < width → load st.mem (a + 4 * k) 4 = den (inpOf ctx s0) ρ s1.terms (l.getD k 0) := by
@@ -710,6 +1183,51 @@ private theorem symLoadValArray_sound {ctx : Ctx} {p : Program} {s0 : State} (E 
       · intro m hm'
         rw [hA]; exact dn m hm'
     next => exact (refuse_ok h).elim
+
+theorem wroteWIds_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym}
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {w base : Nat} {x : String} {r n : Nat}
+    (hw : ctx.contract.outs[w]? = some (x, r, n)) :
+    ∀ (count k : Nat) {ids : List Nat}, wroteWIds s.wroteW w base count k = some ids →
+      ids.length = count ∧
+      (∀ i ∈ ids, i < s.terms.length) ∧
+      ∀ j, j < count → load st.mem (s0.reg r + 4 * (base + k + j)) 4 = den (inpOf ctx s0) ρ s.terms (ids.getD j 0)
+  | 0, _, _, h => by
+    simp only [wroteWIds, Option.some.injEq] at h; subst h
+    exact ⟨rfl, (fun _ m => nomatch m), (fun _ hj => by omega)⟩
+  | count + 1, k, _, h => by
+    simp only [wroteWIds] at h
+    cases hf : s.wroteW.find? (fun e => e.1 == w && e.2.1 == base + k) with
+    | none => simp [hf] at h
+    | some e =>
+      simp only [hf] at h
+      cases hr : wroteWIds s.wroteW w base count (k + 1) with
+      | none => simp [hr] at h
+      | some rest =>
+        simp only [hr, Option.some.injEq] at h; subst h
+        have hmem := List.mem_of_find?_eq_some hf
+        have hpred := List.find?_some hf
+        simp only [Bool.and_eq_true, beq_iff_eq] at hpred
+        obtain ⟨he1, he2⟩ := hpred
+        have hlt_id : e.2.2 < s.terms.length := wf.words.wrote e.1 e.2.1 e.2.2 hmem
+        have ⟨_, hbytes⟩ := H.words.wrote e.1 e.2.1 e.2.2 hmem x r n (by rw [he1]; exact hw)
+        have hdn_lt := den_lt (ρ := ρ) wf.words.table (inpOf_lt_vec ctx s0) wf.words.rotrs e.2.2
+        have hld0 : load st.mem (s0.reg r + 4 * (base + k)) 4 = den (inpOf ctx s0) ρ s.terms e.2.2 := by
+          apply load4_of_bytes_vec _ _ _ (by unfold W32 at hdn_lt; exact hdn_lt)
+          intro bb hbb
+          have := hbytes bb hbb
+          rw [he2] at this
+          simpa using this
+        obtain ⟨rlen, rlt, rmem⟩ := wroteWIds_sound H wf hw count (k + 1) hr
+        refine ⟨by simp [rlen], fun i mi => ?_, fun j hj => ?_⟩
+        · rcases List.mem_cons.mp mi with rfl | mi
+          · exact hlt_id
+          · exact rlt i mi
+        · cases j with
+          | zero => simpa using hld0
+          | succ j' =>
+            have := rmem j' (by omega)
+            have hidx : base + k + (j' + 1) = base + (k + 1) + j' := by omega
+            rw [hidx]; simpa using this
 
 theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s1 : Sym} {addr : Row} {l : List Nat}
     {items rest : Items} {ρ : Nat → Int} {st : State} {width : Nat}
@@ -786,33 +1304,84 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
             cases hpr : (if width % 2 = 0 then framePairRows s o (width / 2) else none) with
             | none =>
               simp only [hpr] at h
-              cases hfw : frameWIds s.frameW o width 0 with
-              | none => simp only [hfw] at h; exact (refuse_ok h).elim
-              | some fids =>
-                simp only [hfw] at h
+              cases hpn : (if width % 2 = 0 then framePairNodes s o (width / 2) else none) with
+              | some nodes =>
+                simp only [hpn] at h
+                have hw2 : width % 2 = 0 := by
+                  by_cases hw : width % 2 = 0
+                  · exact hw
+                  · simp [hw] at hpn
+                simp only [hw2, ↓reduceIte] at hpn
                 have := V.pure_ok h
                 injection this with h1 _
                 injection h1 with h1 h2
                 subst h1 h2
-                obtain ⟨flen, flt, fmem⟩ := frameWIds_sound H wf E.stackAt width 0 o hfw
+                obtain ⟨nlen, nmem⟩ := framePairNodes_sound H E.stackAt (width / 2) o hpn
+                have hlen : nodes.length = width := by omega
+                have h2w : 2 * (width / 2) = width := by omega
                 have hbound0 : -(ctx.contract.stackAt s0 : Int) ≤ o := by
-                  have := (fmem 0 nonempty).1; omega
+                  have := (nmem 0 (by omega)).1; omega
                 have hrsp : ρ RSP = s0.reg RSP := H.entry RSP (by unfold Ctx.nreg Contract.regs RSP; split <;> omega)
                 have eoff := ev_isConst (ρ := ρ) hc
                 rw [ev_sub, ev_var, hrsp] at eoff
                 have hsmall := E.small RSP
                 have hstack := E.stackAt
                 have hA : a = ((s0.reg RSP : Int) + o).toNat := ha ((s0.reg RSP : Int) + o).toNat (by omega) (by unfold M64 at hsmall ⊢; omega)
-                refine ⟨allowed_of _ _ _ ?_, ⟨Agree.refl _ _, Nat.le_refl _, H, wf⟩, flen, flt, ?_⟩
+                obtain ⟨e, ok, tlen, tlt, tdn⟩ := termsOf_step (mk := intern)
+                  (val := fun nd => match nd with | .input j idx => inpOf ctx s0 j idx | _ => 0)
+                  (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) nodes s.tab
+                  (fun nd mnd T _ okT => by
+                    obtain ⟨k, hk, hget⟩ := List.mem_iff_getElem.mp mnd
+                    obtain ⟨_, _, j, idx, hnd, _⟩ := nmem k (by omega)
+                    have hnd' : nd = .input j idx := by
+                      rw [← hget]; simpa [List.getD, List.getElem?_eq_getElem hk] using hnd
+                    subst hnd'
+                    exact input_step okT)
+                  (Ext.refl _) wf.words.ok
+                refine ⟨allowed_of _ _ _ ?_, Carried.terms H wf e ok, by omega, tlt, ?_⟩
                 · intro y hy1 hy2
                   simp only [Contract.perm, Bool.or_eq_true]
                   left; left; left; left; left; left
                   simp only [Contract.inFrame, Bool.and_eq_true, decide_eq_true_eq]
                   omega
                 · intro k hk
-                  rw [hA]
-                  have hm := (fmem k hk).2.2
-                  simpa only [Int.ofNat_zero, Int.mul_zero, Int.add_zero] using hm
+                  have hk' : k < nodes.length := by omega
+                  obtain ⟨_, _, j, idx, hnd, hmem⟩ := nmem k (by omega)
+                  have hgk : nodes[k] = .input j idx := by
+                    simpa [List.getD, List.getElem?_eq_getElem hk'] using hnd
+                  have hd := tdn k hk'
+                  rw [hgk] at hd
+                  rw [hA, hmem]
+                  simpa [List.getD, List.getElem?_eq_getElem (by omega : k < (termsOf intern nodes s.tab).1.length)] using hd.symm
+              | none =>
+                simp only [hpn] at h
+                cases hfw : frameWIds s.frameW o width 0 with
+                | none => simp only [hfw] at h; exact (refuse_ok h).elim
+                | some fids =>
+                  simp only [hfw] at h
+                  have := V.pure_ok h
+                  injection this with h1 _
+                  injection h1 with h1 h2
+                  subst h1 h2
+                  obtain ⟨flen, flt, fmem⟩ := frameWIds_sound H wf E.stackAt width 0 o hfw
+                  have hbound0 : -(ctx.contract.stackAt s0 : Int) ≤ o := by
+                    have := (fmem 0 nonempty).1; omega
+                  have hrsp : ρ RSP = s0.reg RSP := H.entry RSP (by unfold Ctx.nreg Contract.regs RSP; split <;> omega)
+                  have eoff := ev_isConst (ρ := ρ) hc
+                  rw [ev_sub, ev_var, hrsp] at eoff
+                  have hsmall := E.small RSP
+                  have hstack := E.stackAt
+                  have hA : a = ((s0.reg RSP : Int) + o).toNat := ha ((s0.reg RSP : Int) + o).toNat (by omega) (by unfold M64 at hsmall ⊢; omega)
+                  refine ⟨allowed_of _ _ _ ?_, ⟨Agree.refl _ _, Nat.le_refl _, H, wf⟩, flen, flt, ?_⟩
+                  · intro y hy1 hy2
+                    simp only [Contract.perm, Bool.or_eq_true]
+                    left; left; left; left; left; left
+                    simp only [Contract.inFrame, Bool.and_eq_true, decide_eq_true_eq]
+                    omega
+                  · intro k hk
+                    rw [hA]
+                    have hm := (fmem k hk).2.2
+                    simpa only [Int.ofNat_zero, Int.mul_zero, Int.add_zero] using hm
             | some rows =>
               simp only [hpr] at h
               have hw2 : width % 2 = 0 := by
@@ -835,10 +1404,10 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
               have hsmall := E.small RSP
               have hstack := E.stackAt
               have hA : a = ((s0.reg RSP : Int) + o).toNat := ha ((s0.reg RSP : Int) + o).toNat (by omega) (by unfold M64 at hsmall ⊢; omega)
-              obtain ⟨e, ok, tlen, tlt, tdn⟩ := termsOf_step (mk := wAtom)
+              obtain ⟨e, ok, tlen, tlt, tdn⟩ := termsOf_step (mk := wAtomK s.known)
                 (val := fun r => (ev ρ r % W32i).toNat)
                 (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) rows s.tab
-                (fun r mr T _ okT => wAtom_step okT (rbd r mr))
+                (fun r mr T eT okT => wAtomK_step_of H wf eT okT (rbd r mr))
                 (Ext.refl _) wf.words.ok
               refine ⟨allowed_of _ _ _ ?_, Carried.terms H wf e ok, by omega, tlt, ?_⟩
               · intro y hy1 hy2
@@ -875,41 +1444,222 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
           have hj' : (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? = some (x', r, n') := by simpa using hj
           simp only [hj'] at h
           split at h
-          next => exact (refuse_ok h).elim
-          next hin =>
+          next hcond =>
+            obtain ⟨c0, cm, cn, cn'⟩ := hcond
+            have hm := List.mem_of_getElem? hw'
+            have hfit := (E.out hm).1
+            have hr : ρ r = s0.reg r := H.entry r (outs_lt hm)
+            have eoff := ev_isConst (ρ := ρ) hc
+            rw [ho, ev_sub, ev_var, hr] at eoff
+            have hA : a = s0.reg r + c.toNat := ha (s0.reg r + c.toNat) (by omega) (by unfold M64 at hfit ⊢; omega)
+            have hperm : allowed (ctx.contract.perm ctx.pieces s0).read a (4 * width) = true := by
+              apply allowed_of
+              intro y hy1 hy2
+              simp only [Contract.perm, Bool.or_eq_true]
+              left; left; left; right
+              unfold Contract.inFixed
+              simp only [Bool.or_eq_true]
+              rcases List.mem_append.mp (List.mem_of_getElem? hj') with m | m
+              · left
+                exact List.any_eq_true.mpr ⟨(x', r, n'), m, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
+              · right
+                exact List.any_eq_true.mpr ⟨(x', r, n'), m, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
             split at h
-            next hcond =>
+            next hin =>
               have := V.pure_ok h
               injection this with h1 _
               injection h1 with h1 h2
               subst h1 h2
-              obtain ⟨c0, cm, cn, cn'⟩ := hcond
               have hin' : w ∈ s.intact := by simpa using hin
-              have hm := List.mem_of_getElem? hw'
-              have hfit := (E.out hm).1
-              have hr : ρ r = s0.reg r := H.entry r (outs_lt hm)
-              have eoff := ev_isConst (ρ := ρ) hc
-              rw [ho, ev_sub, ev_var, hr] at eoff
-              have hA : a = s0.reg r + c.toNat := ha (s0.reg r + c.toNat) (by omega) (by unfold M64 at hfit ⊢; omega)
               have hmem : ∀ k, k < 4 * width → st.mem (s0.reg r + c.toNat + k) = s0.mem (s0.reg r + c.toNat + k) := by
                 intro k hk
                 have := H.words.intact w hin' x r n hw' (c.toNat + k) (by omega)
                 rw [← Nat.add_assoc] at this; exact this
               obtain ⟨cr, len, lt, dn⟩ := loadWords_terms (ρ := ρ) H wf (wordRuns_of hj') hmem (by omega)
-              refine ⟨allowed_of _ _ _ ?_, cr, len, lt, ?_⟩
-              · intro y hy1 hy2
-                simp only [Contract.perm, Bool.or_eq_true]
-                left; left; left; right
-                unfold Contract.inFixed
-                simp only [Bool.or_eq_true]
-                rcases List.mem_append.mp (List.mem_of_getElem? hj') with m | m
-                · left
-                  exact List.any_eq_true.mpr ⟨(x', r, n'), m, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
-                · right
-                  exact List.any_eq_true.mpr ⟨(x', r, n'), m, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
-              · intro k hk
-                rw [hA]; exact dn k hk
-            next => exact (refuse_ok h).elim
+              exact ⟨hperm, cr, len, lt, fun k hk => by rw [hA]; exact dn k hk⟩
+            next =>
+              cases hww : wroteWIds s.wroteW w (c.toNat / 4) width 0 with
+              | none => simp only [hww] at h; exact (refuse_ok h).elim
+              | some ids =>
+                simp only [hww] at h
+                have := V.pure_ok h
+                injection this with h1 _
+                injection h1 with h1 h2
+                subst h1 h2
+                obtain ⟨wlen, wlt, wmem⟩ := wroteWIds_sound H wf hw' width 0 hww
+                refine ⟨hperm, Carried.here H wf, wlen, wlt, fun k hk => ?_⟩
+                rw [hA]
+                have := wmem k hk
+                have hidx : s0.reg r + c.toNat + 4 * k = s0.reg r + 4 * (c.toNat / 4 + 0 + k) := by omega
+                rw [hidx]; exact this
+          next => exact (refuse_ok h).elim
+
+theorem valOfTerm_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s s' : Sym} {st : State} {id : Nat} {r : Row}
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hid : id < s.terms.length) (h : valOfTerm s id = (r, s')) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ bounded s'.nvars r ∧
+      ev ρ' r = (den (inpOf ctx s0) ρ s.terms id : Int) ∧ 0 ≤ ev ρ' r ∧ ev ρ' r < W32i := by
+  have hdn_lt := den_lt (ρ := ρ) wf.words.table (inpOf_lt_vec ctx s0) wf.words.rotrs id
+  have alloc_case : (match knownTermVal id s.known with
+      | some v => (Lin.var v, s)
+      | none =>
+        let v := s.nvars
+        (Lin.var v, { s with nvars := v + 1, known := .termVal v id :: .word32 v (v + 1) :: s.known })) = (r, s') →
+      ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ bounded s'.nvars r ∧
+        ev ρ' r = (den (inpOf ctx s0) ρ s.terms id : Int) ∧ 0 ≤ ev ρ' r ∧ ev ρ' r < W32i := by
+    intro h0
+    cases hk : knownTermVal id s.known with
+    | some v =>
+      rw [hk] at h0
+      injection h0 with hr hs; subst hr hs
+      have hm := knownTermVal_mem hk
+      have hwf := wf.known _ hm
+      have hho := H.known _ hm
+      refine ⟨ρ, Carried.here H wf, bounded_var hwf.1, ?_, ?_, ?_⟩
+      · rw [ev_var]; exact hho
+      · rw [ev_var, hho]; exact Int.natCast_nonneg _
+      · rw [ev_var, hho]; unfold W32 W32i at *; omega
+    | none =>
+      rw [hk] at h0
+      injection h0 with hr hs; subst hr hs
+      let val : Int := (den (inpOf ctx s0) ρ s.terms id : Int)
+      let ρ' := extend ρ s.nvars val
+      have ag : Agree s.nvars ρ ρ' := fun k hk' => by
+        show ρ k = extend ρ s.nvars val k
+        unfold extend; rw [if_neg (by omega)]
+      have H' := H.agree wf ag
+      have hnew : ρ' s.nvars = val := extend_new ρ s.nvars val
+      have hd_ag : den (inpOf ctx s0) ρ' s.terms id = den (inpOf ctx s0) ρ s.terms id :=
+        (den_agree wf.words.table (fun j r' hr' => ev_agree (wf.words.atoms j r' hr') ag) hid).symm
+      have H1 : Holds ctx s0 ρ' { s with nvars := s.nvars + 1, known := .termVal s.nvars id :: .word32 s.nvars (s.nvars + 1) :: s.known } st :=
+        ⟨H'.entry, H'.data, H'.reg, H'.small, H'.zf, H'.cf, H'.frame, H'.frameW, H'.facts, H'.bytes, H'.spec,
+         H'.mem, H'.wrote, H'.words, fun k mk => by
+           rcases List.mem_cons.mp mk with rfl | mk
+           · simp only [Known.holds]; rw [hnew, hd_ag]
+           · rcases List.mem_cons.mp mk with rfl | mk
+             · intro v hv1 hv2
+               have hv : v = s.nvars := by omega
+               subst hv; rw [hnew]; unfold W32 W32i at *; omega
+             · exact H'.known k mk,
+         H'.range, H'.vecIntact⟩
+      have wf1 : WF ctx { s with nvars := s.nvars + 1, known := .termVal s.nvars id :: .word32 s.nvars (s.nvars + 1) :: s.known } :=
+        ⟨Nat.le_succ_of_le wf.base, fun r hr => bounded_mono (Nat.le_succ _) (wf.reg r hr),
+         Flag.bounded_mono (Nat.le_succ _) wf.zf, Flag.bounded_mono (Nat.le_succ _) wf.cf,
+         fun o v m => bounded_mono (Nat.le_succ _) (wf.frame o v m), wf.frameW,
+         fun f mf => bounded_mono (Nat.le_succ _) (wf.facts f mf),
+         fun v r o m => ⟨Nat.lt_succ_of_lt (wf.bytes v r o m).1, bounded_mono (Nat.le_succ _) (wf.bytes v r o m).2⟩,
+         fun f mf => SFact.bounded_mono (Nat.le_succ _) (wf.spec f mf),
+         fun w o x m => ⟨bounded_mono (Nat.le_succ _) (wf.wrote w o x m).1, bounded_mono (Nat.le_succ _) (wf.wrote w o x m).2⟩,
+         wf.words.mono rfl rfl rfl (Nat.le_succ _),
+         fun k mk => by
+           rcases List.mem_cons.mp mk with rfl | mk
+           · exact ⟨Nat.lt_succ_self _, hid⟩
+           · rcases List.mem_cons.mp mk with rfl | mk
+             · exact Nat.le_refl _
+             · exact Known.wf_mono (Nat.le_succ _) (Nat.le_refl _) (wf.known k mk),
+         fun rg hrg => ⟨bounded_mono (Nat.le_succ _) (wf.range rg hrg).1, fun v mv => SVal.bounded_mono (Nat.le_succ _) ((wf.range rg hrg).2 v mv)⟩⟩
+      refine ⟨ρ', ⟨ag, Nat.le_succ _, H1, wf1⟩, bounded_var (Nat.lt_succ_self _), ?_, ?_, ?_⟩
+      · rw [ev_var, hnew]
+      · rw [ev_var, hnew]; exact Int.natCast_nonneg _
+      · rw [ev_var, hnew]; unfold W32 W32i at *; omega
+  unfold valOfTerm at h
+  dsimp only at h
+  cases hget : s.tab.arr[id]? with
+  | none => simp only [hget] at h; exact alloc_case h
+  | some nd =>
+    cases nd with
+    | atom r0 =>
+      simp only [hget] at h
+      by_cases hw32 : isWord32Row s r0 = true
+      · simp only [hw32, ↓reduceIte] at h
+        injection h with hr hs; subst hr hs
+        have hget' : s.terms[id]? = some (.atom r0) := by simpa [Sym.terms, Tab.list] using hget
+        have hb := wf.words.atoms id r0 hget'
+        have ⟨h0, h1⟩ := isWord32Row_sound H hw32
+        have hd := den_node (inp := inpOf ctx s0) (ρ := ρ) wf.words.table hget'
+        simp only [Node.value] at hd
+        refine ⟨ρ, Carried.here H wf, hb, ?_, h0, h1⟩
+        rw [hd]
+        have : ev ρ r0 % W32i = ev ρ r0 := Int.emod_eq_of_lt h0 h1
+        omega
+      · simp only [hw32, ↓reduceIte] at h
+        exact alloc_case h
+    | input _ _ | add _ | xor _ _ | band _ _ | rotr _ _ | shl _ _ | shr _ _ | ult _ _ | sel _ _ _ =>
+      simp only [hget] at h; exact alloc_case h
+
+theorem symLoadWordScalar_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) : LoadWordOk E := by
+  intro s s' addr size v items rest ρ st a h H wf hlt ha
+  have hloc : ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → a = A := by
+    intro A eA ltA; unfold M64 at hlt ltA; omega
+  unfold symLoadWordScalar at h
+  split at h
+  next hs4 =>
+    subst hs4
+    obtain ⟨⟨ids, s1⟩, r1, e1, h⟩ := V.bind_ok h
+    obtain ⟨al, c1, hlen, hidlt, hld⟩ := symLoadWords_sound E e1 H wf (by decide) a hloc
+    cases ids with
+    | nil => simp at hlen
+    | cons id0 more =>
+      cases more with
+      | cons _ _ => simp at hlen
+      | nil =>
+        simp only at h
+        cases hv0 : valOfTerm s1 id0 with
+        | mk r0 s2 =>
+          rw [hv0] at h
+          have hp := V.pure_ok h
+          injection hp with hp _; injection hp with hv hs; subst hv hs
+          obtain ⟨ρ2, c2, hbr, hevr, h0, h1⟩ := valOfTerm_sound c1.holds c1.wf (hidlt id0 (by simp)) hv0
+          have hld0 := hld 0 (by decide)
+          simp only [Nat.mul_zero, Nat.add_zero, List.getD_cons_zero] at hld0
+          refine ⟨ρ2, c1.then c2, al, ?_, ?_, hbr⟩
+          · have hlt4 := load_lt st.mem a 4
+            have h4 : (256 : Nat) ^ 4 < M64 := by decide
+            omega
+          · rw [hevr, ← hld0]
+  next =>
+    split at h
+    next hs8 =>
+      subst hs8
+      obtain ⟨⟨ids, s1⟩, r1, e1, h⟩ := V.bind_ok h
+      obtain ⟨al, c1, hlen, hidlt, hld⟩ := symLoadWords_sound E e1 H wf (by decide) a hloc
+      cases ids with
+      | nil => simp at hlen
+      | cons id0 more =>
+        cases more with
+        | nil => simp at hlen
+        | cons id1 more2 =>
+          cases more2 with
+          | cons _ _ => simp at hlen
+          | nil =>
+            simp only at h
+            cases hv0 : valOfTerm s1 id0 with
+            | mk r0 s2 =>
+              rw [hv0] at h
+              cases hv1 : valOfTerm s2 id1 with
+              | mk r1 s3 =>
+                rw [hv1] at h
+                have hp := V.pure_ok h
+                injection hp with hp _; injection hp with hv hs; subst hv hs
+                have hteq : s2.terms = s1.terms := by
+                  have := hv0; unfold valOfTerm at this; dsimp only at this
+                  split at this
+                  · injection this with _ h2; subst h2; rfl
+                  · split at this <;> (injection this with _ h2; subst h2; rfl)
+                obtain ⟨ρ2, c2, hbr0, hevr0, h00, h01⟩ := valOfTerm_sound c1.holds c1.wf (hidlt id0 (by simp)) hv0
+                have hid1 : id1 < s2.terms.length := by rw [hteq]; exact hidlt id1 (by simp)
+                obtain ⟨ρ3, c3, hbr1, hevr1, h10, h11⟩ := valOfTerm_sound c2.holds c2.wf hid1 hv1
+                have hevr0' : ev ρ3 r0 = ev ρ2 r0 := (ev_agree hbr0 c3.agree).symm
+                have hdn1 : den (inpOf ctx s0) ρ2 s2.terms id1 = den (inpOf ctx s0) ρ s1.terms id1 := by
+                  rw [hteq]
+                  exact (den_agree c1.wf.words.table (fun j rr hrr => ev_agree (c1.wf.words.atoms j rr hrr) c2.agree) (hidlt id1 (by simp))).symm
+                have hld0 : load st.mem a 4 = den (inpOf ctx s0) ρ s1.terms id0 := hld 0 (by decide)
+                have hld1 : load st.mem (a + 4) 4 = den (inpOf ctx s0) ρ s1.terms id1 := hld 1 (by decide)
+                have hhalves := load_halves_vec st.mem a
+                refine ⟨ρ3, (c1.then c2).then c3, al, ?_, ?_, bounded_add (bounded_mono c3.mono hbr0) (bounded_scale _ hbr1)⟩
+                · have hlt8 := load_lt st.mem a 8; rw [pow8] at hlt8; exact hlt8
+                · rw [ev_add, ev_scale, hevr0', hevr0, hevr1, hdn1, ← hld0, ← hld1, hhalves]
+                  rw [Int.natCast_add, Int.natCast_mul]; rfl
+    next => exact (refuse_ok h).elim
 
 theorem symMemWords_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}
     {bind : Bind} {args : List Expr} {width : Nat} {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
@@ -961,12 +1711,13 @@ theorem symHalves_sound {ctx : Ctx} {s0 : State} {s s1 : Sym} {x : Row} {l : Lis
     injection h1 with h1 h2
     subst h1 h2
     obtain ⟨ρ', c, hq, hr, bq, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := W32i) H wf hb (by decide) (by rw [← hx]; omega)
-    obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := wAtom) (val := fun r => (ev ρ' r % W32i).toNat) (inp := inpOf ctx s0) (ρ := ρ')
+    obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := wAtomK (symDivide s x W32i).2.2.known)
+      (val := fun r => (ev ρ' r % W32i).toNat) (inp := inpOf ctx s0) (ρ := ρ')
       (nv := (symDivide s x W32i).2.2.nvars) (T0 := (symDivide s x W32i).2.2.terms)
       [(symDivide s x W32i).2.1, (symDivide s x W32i).1, Lin.const 0, Lin.const 0] (symDivide s x W32i).2.2.tab
       (by
         intro r mr T eT okT
-        apply wAtom_step okT
+        apply wAtomK_step_of c.holds c.wf eT okT
         simp only [List.mem_cons, List.mem_nil_iff, or_false] at mr
         rcases mr with rfl | rfl | rfl | rfl
         · exact br
@@ -991,8 +1742,8 @@ theorem symHalves_sound {ctx : Ctx} {s0 : State} {s s1 : Sym} {x : Row} {l : Lis
       rw [ev_const]; rfl
   next =>
     have hw : (0 ≤ ev ρ (Lin.word x) ∧ ev ρ (Lin.word x) < W32i) ∧
-        (l, s1) = ((termsOf wAtom [x, Lin.high x, Lin.const 0, Lin.const 0] s.tab).1,
-                   { s with tab := (termsOf wAtom [x, Lin.high x, Lin.const 0, Lin.const 0] s.tab).2 }) := by
+        (l, s1) = ((termsOf (wAtomK s.known) [x, Lin.high x, Lin.const 0, Lin.const 0] s.tab).1,
+                   { s with tab := (termsOf (wAtomK s.known) [x, Lin.high x, Lin.const 0, Lin.const 0] s.tab).2 }) := by
       split at h
       next =>
         obtain ⟨_, r1, g1, h⟩ := V.bind_ok h
@@ -1006,23 +1757,16 @@ theorem symHalves_sound {ctx : Ctx} {s0 : State} {s s1 : Sym} {x : Row} {l : Lis
       next hc =>
         have := V.pure_ok h
         injection this with h1 _
-        refine ⟨?_, h1⟩
-        cases hk : Lin.isConst (Lin.word x) with
-        | none => simp [hk] at hc
-        | some cst =>
-          have e1 := ev_isConst (ρ := ρ) hk
-          have e2 : cst = x.constant % W32i := isConst_constant hk
-          rw [e1, e2]
-          exact ⟨Int.emod_nonneg _ (by decide), Int.emod_lt_of_pos _ (by decide)⟩
+        exact ⟨isWord32Row_sound H (by simpa using hc), h1⟩
     obtain ⟨hw, h1⟩ := hw
     injection h1 with h1 h2
     subst h1 h2
     have eh := ev_high ρ x
-    obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := wAtom) (val := fun r => (ev ρ r % W32i).toNat) (inp := inpOf ctx s0) (ρ := ρ)
+    obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := wAtomK s.known) (val := fun r => (ev ρ r % W32i).toNat) (inp := inpOf ctx s0) (ρ := ρ)
       (nv := s.nvars) (T0 := s.terms) [x, Lin.high x, Lin.const 0, Lin.const 0] s.tab
       (by
         intro r mr T eT okT
-        apply wAtom_step okT
+        apply wAtomK_step_of H wf eT okT
         simp only [List.mem_cons, List.mem_nil_iff, or_false] at mr
         rcases mr with rfl | rfl | rfl | rfl
         · exact hb

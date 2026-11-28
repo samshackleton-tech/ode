@@ -903,21 +903,49 @@ theorem knownLoad_mem {j c : Nat} : ∀ {l : List Known} {v : Nat}, knownLoad j 
     | use _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | record _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | word32 _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
+    | termVal _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
+
+/-- Soundness contract for word-backed scalar 4/8-byte loads (`symLoadWordScalar`), proved in SoundVec.lean. -/
+abbrev LoadWordOk {ctx : Ctx} {p : Program} {s0 : State} (_E : Setting ctx p s0) : Prop :=
+  ∀ {s s' : Sym} {addr : Row} {size : Nat} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State} (a : Nat),
+    symLoadWordScalar ctx s addr size items = .ok ((v, s'), rest) → Holds ctx s0 ρ s st → WF ctx s →
+    a < M64 → (a : Int) % 2 ^ 64 = ev ρ addr % 2 ^ 64 →
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ allowed (ctx.contract.perm ctx.pieces s0).read a size = true ∧
+      EV.sem ρ' s'.nvars (load st.mem a size) v
+
+/-- Soundness contract for 4-byte scalar stores (`symStore4`), proved in SoundCallW.lean. -/
+abbrev Store4Ok {ctx : Ctx} {p : Program} {s0 : State} (_E : Setting ctx p s0) : Prop :=
+  ∀ {s s' : Sym} {addr xr : Row} {items rest : Items} {ρ : Nat → Int} {st : State} (a x : Nat),
+    symStore4 ctx s addr xr items = .ok (s', rest) → Holds ctx s0 ρ s st → WF ctx s →
+    a < M64 → (a : Int) % 2 ^ 64 = ev ρ addr % 2 ^ 64 →
+    EV.sem ρ s.nvars x (.lin xr) →
+    allowed (ctx.contract.perm ctx.pieces s0).write a 4 = true ∧
+      ∃ ρ', Carried ctx s0 ρ s ρ' s' { st with mem := store st.mem a x 4 }
 
 /-- Eight bytes read of a run of a fixed count given to read: the number the state knows there. The run is
 as it was at entry (the function may not write it), so the number is what `load` reads there at entry. -/
-theorem symLoadFixed_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {addr : Row} {size : Nat} {v : EV}
+theorem symLoadFixed_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (hlw : LoadWordOk E)
+    {s s' : Sym} {addr : Row} {size : Nat} {v : EV}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symLoadFixed ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (a : Nat) (hlt : a < M64) (ha : (a : Int) % 2 ^ 64 = ev ρ addr % 2 ^ 64) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ allowed (ctx.contract.perm ctx.pieces s0).read a size = true ∧ EV.sem ρ' s'.nvars (load st.mem a size) v := by
   unfold symLoadFixed at h
   cases hf : findOut addr ctx.contract.fixeds 0 with
-  | none => simp only [hf] at h; exact (refuse_ok h).elim
+  | none =>
+    simp only [hf] at h
+    split at h
+    · exact hlw a h H wf hlt ha
+    · exact (refuse_ok h).elim
   | some w =>
     obtain ⟨j, off, name, base, count, hw, _, hj, ho⟩ := findOut_spec hf
     subst hw
     simp only [hf] at h
+    split at h
+    next h4 =>
+      subst h4
+      exact hlw a h H wf hlt ha
+    next =>
     have hj' : ctx.contract.fixeds[j]? = some (name, base, count) := by simpa using hj
     cases hc : Lin.isConst off with
     | none => simp only [hc] at h; exact (refuse_ok h).elim
@@ -1080,7 +1108,8 @@ theorem readBytes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         rw [hld, Int.natCast_add, Int.natCast_mul]
         rfl
 
-theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {addr : Row} {size : Nat} {v : EV}
+theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (hlw : LoadWordOk E)
+    {s s' : Sym} {addr : Row} {size : Nat} {v : EV}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symLoad ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hb : bounded s.nvars addr)
     (a : Nat) (hlt : a < M64) (ha : (a : Int) % 2 ^ 64 = ev ρ addr % 2 ^ 64) :
@@ -1092,10 +1121,14 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   cases hl : locate ctx addr with
   | none =>
     simp only [symLoad, hl] at h
-    exact symLoadFixed_sound E h H wf a (by unfold M64; exact hlt) ha
+    exact symLoadFixed_sound E hlw h H wf a (by unfold M64; exact hlt) ha
   | some w =>
     cases w with
-    | out _ _ => simp only [symLoad, hl] at h; exact (refuse_ok h).elim
+    | out _ _ =>
+      simp only [symLoad, hl] at h
+      split at h
+      · exact hlw a h H wf (by unfold M64; exact hlt) ha
+      · exact (refuse_ok h).elim
     | data c =>
       -- the file's read-only data: memory there is as at entry, and at entry it holds the file's bytes
       simp only [symLoad, hl] at h
@@ -1138,7 +1171,11 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         have hadr : (a : Int) = (s0.reg RSP : Int) + c := by omega
         obtain ⟨hr, _, hn⟩ := frame_address E hst h8 a hadr
         cases hf : s.frame.lookup c with
-        | none => simp only [hf] at h; exact (refuse_ok h).elim
+        | none =>
+          simp only [hf] at h
+          split at h
+          · exact hlw a h H wf (by unfold M64; exact hlt) ha
+          · exact (refuse_ok h).elim
         | some v0 =>
           simp only [hf] at h
           have := V.pure_ok h
@@ -1151,7 +1188,12 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
           have lt := load_lt st.mem a 8
           rw [pow8] at lt
           exact ⟨ρ, Carried.here H wf, hr, lt, hv, wf.frame c v0 m⟩
-      next => exact (refuse_ok h).elim
+      next =>
+        split at h
+        next h4 =>
+          subst h4
+          exact hlw a h H wf (by unfold M64; exact hlt) ha
+        next => exact (refuse_ok h).elim
     | region r o =>
       simp only [symLoad, hl] at h
       obtain ⟨base, len, hreg, ho⟩ := locate_region hl
@@ -1264,6 +1306,7 @@ theorem divided_known {s : Sym} {x : Row} {m : Int} {q : Nat} (hd : divided s x 
   | use _ _ _ => cases e
   | record _ _ _ => cases e
   | word32 _ _ => cases e
+  | termVal _ _ => cases e
 
 /-- A number divided by a number above zero: the two new unknowns can be the quotient and the remainder. -/
 theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
@@ -1437,7 +1480,7 @@ theorem inWord32_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {T : List Nod
       rcases h with ⟨h1, h2⟩ | h
       · exact hk (.word32 lo hi) (List.mem_cons_self ..) v h1 h2
       · exact inWord32_sound (fun k' m => hk k' (List.mem_cons_of_mem _ m)) h
-    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ =>
+    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ | termVal _ _ =>
       simp only [inWord32] at h
       exact inWord32_sound (fun k' m => hk k' (List.mem_cons_of_mem _ m)) h
 
@@ -1700,6 +1743,7 @@ theorem knownOr_mem {x y : Row} : ∀ {l : List Known} {v : Nat}, knownOr x y l 
     | use _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | record _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | word32 _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
+    | termVal _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
 
 /-- Two numbers' bits put together: the unknown the state knows as that number is it. -/
 theorem symOrKnown_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
@@ -2134,6 +2178,77 @@ theorem symAndConst_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x : Row} {m : I
           rw [hand, Nat.mod_eq_of_lt hlt, ev_scale, hr2, hq1, ← hx2,
               Int.natCast_mul, Int.natCast_emod, Int.natCast_ediv, castk, castw, Int.mul_comm]
 
+theorem rowWord32UpperAux_sound {ctx : Ctx} {s0 : State} {T : List Node} {known : List Known} {ρ : Nat → Int}
+    (hk : ∀ kn ∈ known, kn.holds ctx s0 ρ T) :
+    ∀ (cs : List Int) (i : Nat) {u : Int}, rowWord32UpperAux known cs i = some u →
+      0 ≤ Arithmetic.dot cs (fun k => ρ (i + k)) ∧ Arithmetic.dot cs (fun k => ρ (i + k)) ≤ u
+  | [], _, _, h => by simp only [rowWord32UpperAux, Option.some.injEq] at h; subst h; simp [Arithmetic.dot]
+  | c :: cs, i, u, h => by
+    simp only [rowWord32UpperAux] at h
+    have shift_dot : Arithmetic.dot cs (fun k => ρ (i + (k + 1))) = Arithmetic.dot cs (fun k => ρ (i + 1 + k)) := by
+      apply congrArg (Arithmetic.dot cs); funext k; congr 1; omega
+    split at h
+    next hc0 =>
+      have hc : c = 0 := by simpa using hc0
+      subst hc
+      have ih := rowWord32UpperAux_sound hk cs (i + 1) h
+      simp only [Arithmetic.dot, Int.zero_mul, Int.zero_add, shift_dot]
+      exact ih
+    next hc0 =>
+      split at h
+      · cases h
+      next hok =>
+        simp only [Bool.or_eq_true, decide_eq_true_eq, Bool.not_eq_true', not_or, Bool.not_eq_false] at hok
+        obtain ⟨hpos, hw⟩ := hok
+        have hcne : c ≠ 0 := by simpa using hc0
+        have hcpos : 0 < c := by omega
+        cases hr : rowWord32UpperAux known cs (i + 1) with
+        | none => simp [hr] at h
+        | some rest =>
+          simp only [hr, Option.map_some, Option.some.injEq] at h
+          subst h
+          have ih := rowWord32UpperAux_sound hk cs (i + 1) hr
+          have ⟨hv0, hv1⟩ := inWord32_sound hk hw
+          simp only [Arithmetic.dot, Nat.add_zero, shift_dot]
+          have h1 : 0 ≤ c * ρ i := Int.mul_nonneg (by omega) hv0
+          have h2 : c * ρ i ≤ c * (W32i - 1) := Int.mul_le_mul_of_nonneg_left (by omega) (by omega)
+          omega
+
+theorem rowWord32Upper_sound {ctx : Ctx} {s0 : State} {T : List Node} {known : List Known} {ρ : Nat → Int}
+    (hk : ∀ kn ∈ known, kn.holds ctx s0 ρ T) {r : Row} {u : Int} (h : rowWord32Upper known r = some u) :
+    0 ≤ ev ρ r ∧ ev ρ r ≤ u := by
+  unfold rowWord32Upper at h
+  split at h
+  · cases h
+  · next hok =>
+    simp only [Bool.or_eq_true, decide_eq_true_eq, not_or] at hok
+    cases ha : rowWord32UpperAux known r.coeff 0 with
+    | none => simp [ha] at h
+    | some v =>
+      simp only [ha, Option.map_some, Option.some.injEq] at h
+      subst h
+      have ih := rowWord32UpperAux_sound hk r.coeff 0 ha
+      have hfn : (fun k => ρ (0 + k)) = ρ := by funext k; simp
+      rw [hfn] at ih
+      simp only [ev]
+      omega
+
+theorem inRangeFast_sound {ctx : Ctx} {s0 : State} {s : Sym} {ρ : Nat → Int} {st : State} {r : Row}
+    (H : Holds ctx s0 ρ s st) (h : inRangeFast s r = true) : 0 ≤ ev ρ r ∧ ev ρ r < M64 := by
+  unfold inRangeFast at h
+  simp only [Bool.or_eq_true, Bool.and_eq_true] at h
+  rcases h with ⟨hlo, hhi⟩ | hup
+  · have a0 := plain_sound hlo ρ H.facts
+    have a1 := plain_sound hhi ρ H.facts
+    simp only [ev_sub, ev_const, M64] at a1 ⊢
+    omega
+  · cases hu : rowWord32Upper s.known r with
+    | none => simp [hu] at hup
+    | some u =>
+      simp only [hu, decide_eq_true_eq] at hup
+      have ⟨a0, a1⟩ := rowWord32Upper_sound H.known hu
+      omega
+
 theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symPrim f s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hy : EV.sem ρ s.nvars xb (.lin y)) :
@@ -2155,10 +2270,9 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
       injection this with hp _
       injection hp with h1 h2
       subst h1 h2
-      have hraw' := Bool.and_eq_true_iff.mp hraw
-      have hhi := plain_sound hraw'.2 ρ hf
-      simp only [ev_sub, ev_add, ev_const, M64] at hhi
-      have hlt : xa + xb < M64 := by unfold M64; omega
+      have ⟨_, hhi⟩ := inRangeFast_sound H hraw
+      simp only [ev_add] at hhi
+      have hlt : xa + xb < M64 := by unfold M64 at hhi ⊢; omega
       refine ⟨ρ, Carried.here H wf, (xa + xb) % M64, by simp only [prim]; rw [if_pos hc], Nat.mod_lt _ (by decide), ?_, bounded_add hx3 hy3⟩
       rw [Nat.mod_eq_of_lt hlt, Int.natCast_add, ev_add, hx2, hy2]
     next =>
@@ -2499,7 +2613,7 @@ theorem flagVal_none_regOf {bind : Bind} {n : String} {r : Nat} {s : State} (h :
   · subst h6; exact absurd h (no "nhi" (by decide) (by decide))
   simp [h1, h2, h3, h4, h5, h6]
 
-theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) :
+theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (hlw : LoadWordOk E) (bind : Bind) :
     ∀ (e : Expr) {s s' : Sym} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State},
     symValue ctx bind s e items = .ok ((v, s'), rest) → Holds ctx s0 ρ s st → WF ctx s →
     ∃ ρ' x, Carried ctx s0 ρ s ρ' s' st ∧ value (ctx.contract.perm ctx.pieces s0) bind st e = some x ∧ EV.sem ρ' s'.nvars x v
@@ -2546,8 +2660,8 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     simp only [symValue] at h
     obtain ⟨⟨x, s1⟩, r1, e1, h⟩ := V.bind_ok h
     obtain ⟨⟨y, s2⟩, r2, e2, h⟩ := V.bind_ok h
-    obtain ⟨ρ1, xa, c1, va, sa⟩ := symValue_sound E bind a e1 H wf
-    obtain ⟨ρ2, xb, c2, vb, sb⟩ := symValue_sound E bind b e2 c1.holds c1.wf
+    obtain ⟨ρ1, xa, c1, va, sa⟩ := symValue_sound E hlw bind a e1 H wf
+    obtain ⟨ρ2, xb, c2, vb, sb⟩ := symValue_sound E hlw bind b e2 c1.holds c1.wf
     have sa2 := EV.sem_agree sa c2.agree c2.mono
     cases x with
     | equal _ _ => exact (refuse_ok h).elim
@@ -2568,7 +2682,7 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           unfold M64 at hx1 hy1
           have hmod : (((xa + (xb + 0)) % M64 : Nat) : Int) % 2 ^ 64 = ev ρ2 (Lin.add (signed x) (signed y)) % 2 ^ 64 := by
             rw [ev_add]; unfold M64; have := sa2.2.1; have := sb.2.1; omega
-          obtain ⟨ρ3, c3, al, sv⟩ := symLoad_sound E h c2.holds c2.wf (bounded_add (bounded_signed sa2.2.2) (bounded_signed sb.2.2))
+          obtain ⟨ρ3, c3, al, sv⟩ := symLoad_sound E hlw h c2.holds c2.wf (bounded_add (bounded_signed sa2.2.2) (bounded_signed sb.2.2))
             ((xa + (xb + 0)) % M64) (Nat.mod_lt _ (by decide)) hmod
           exact ⟨ρ3, _, (c1.then c2).then c3, by simp only [value, values, va, vb, hm, sumList, al, if_true], sv⟩
         | none =>
@@ -2595,7 +2709,7 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   | .call f [a], s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
     obtain ⟨⟨x, s1⟩, r1, e1, h⟩ := V.bind_ok h
-    obtain ⟨ρ1, xa, c1, va, sa⟩ := symValue_sound E bind a e1 H wf
+    obtain ⟨ρ1, xa, c1, va, sa⟩ := symValue_sound E hlw bind a e1 H wf
     cases x with
     | equal _ _ => exact (refuse_ok h).elim
     | below _ _ => exact (refuse_ok h).elim
@@ -3090,7 +3204,8 @@ theorem symTouchFrame_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat 
   · exact ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, (fun _ _ h => nomatch h), wf.facts, wf.bytes, wf.spec, wf.wrote,
       wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, fun _ h => nomatch h⟩
 
-theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {stmt : Stmt}
+theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (hlw : LoadWordOk E) (h4 : Store4Ok E)
+    (bind : Bind) {s s' : Sym} {stmt : Stmt}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symStmt ctx bind s stmt items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (base u : Nat)
     (hv : ∀ place v, stmt ≠ .vset place v) (hw : ∀ place v, stmt ≠ .vset512 place v)
@@ -3145,7 +3260,7 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           next => exact (refuse_ok h).elim
     next hu =>
       obtain ⟨⟨ev, s1⟩, r1, e1, h⟩ := V.bind_ok h
-      obtain ⟨ρ1, x, c1, vx, sx⟩ := symValue_sound E bind v e1 H wf
+      obtain ⟨ρ1, x, c1, vx, sx⟩ := symValue_sound E hlw bind v e1 H wf
       cases place with
       | number _ => exact (refuse_ok h).elim
       | lane _ _ => exact (refuse_ok h).elim
@@ -3211,8 +3326,8 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
               simp only at h
               obtain ⟨⟨ea, s2⟩, r2, e2, h⟩ := V.bind_ok h
               obtain ⟨⟨eb, s3⟩, r3, e3, h⟩ := V.bind_ok h
-              obtain ⟨ρ2, xa, c2, va, sa⟩ := symValue_sound E bind a e2 c1.holds c1.wf
-              obtain ⟨ρ3, xb, c3, vb, sb⟩ := symValue_sound E bind b e3 c2.holds c2.wf
+              obtain ⟨ρ2, xa, c2, va, sa⟩ := symValue_sound E hlw bind a e2 c1.holds c1.wf
+              obtain ⟨ρ3, xb, c3, vb, sb⟩ := symValue_sound E hlw bind b e3 c2.holds c2.wf
               have sx3 := EV.sem_agree (EV.sem_agree sx c2.agree c2.mono) c3.agree c3.mono
               have sa3 := EV.sem_agree sa c3.agree c3.mono
               cases ev with
@@ -3329,7 +3444,20 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                               (fun c ec c0 cn => by unfold M64; omega) sx3
                             refine ⟨ρ4, _, c1.then (c2.then (c3.then c4)), ?_, rfl⟩
                             simp [execStmt, hu, vx, hsize8, values_two va vb, sumList, perm]
-                          next => exact (refuse_ok h).elim
+                          next =>
+                            split at h
+                            next hsize4 =>
+                              have sgx := signed_ev ρ3 ar
+                              have sgy := signed_ev ρ3 br
+                              have hx1 := sa3.1
+                              have hy1 := sb.1
+                              unfold M64 at hx1 hy1
+                              have hmod : (((xa + xb) % M64 : Nat) : Int) % 2 ^ 64 = ev ρ3 (Lin.add (signed ar) (signed br)) % 2 ^ 64 := by
+                                rw [ev_add]; unfold M64; have := sa3.2.1; have := sb.2.1; omega
+                              obtain ⟨perm, ρ4, c4⟩ := h4 ((xa + xb) % M64) x h c3.holds c3.wf (Nat.mod_lt _ (by decide)) hmod sx3
+                              refine ⟨ρ4, _, c1.then (c2.then (c3.then c4)), ?_, rfl⟩
+                              simp [execStmt, hu, vx, hsize4, values_two va vb, sumList, perm]
+                            next => exact (refuse_ok h).elim
                       | frame c =>
                         simp only [hl] at h
                         split at h
@@ -3358,6 +3486,19 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                              Nat.le_trans c1.mono (Nat.le_trans c2.mono c3.mono),
                              c3.holds.write E c hst h8 _ hadr x xr sx3.1 sx3.2.1, c3.wf.write c xr sx3.2.2⟩, ?_, rfl⟩
                           simp [execStmt, hu, vx, hsize, values_two va vb, sumList, hw]
-                        next => exact (refuse_ok h).elim
+                        next =>
+                          split at h
+                          next hsize4 =>
+                            have sgx := signed_ev ρ3 ar
+                            have sgy := signed_ev ρ3 br
+                            have hx1 := sa3.1
+                            have hy1 := sb.1
+                            unfold M64 at hx1 hy1
+                            have hmod : (((xa + xb) % M64 : Nat) : Int) % 2 ^ 64 = ev ρ3 (Lin.add (signed ar) (signed br)) % 2 ^ 64 := by
+                              rw [ev_add]; unfold M64; have := sa3.2.1; have := sb.2.1; omega
+                            obtain ⟨perm, ρ4, c4⟩ := h4 ((xa + xb) % M64) x h c3.holds c3.wf (Nat.mod_lt _ (by decide)) hmod sx3
+                            refine ⟨ρ4, _, c1.then (c2.then (c3.then c4)), ?_, rfl⟩
+                            simp [execStmt, hu, vx, hsize4, values_two va vb, sumList, perm]
+                          next => exact (refuse_ok h).elim
 
 end Ode

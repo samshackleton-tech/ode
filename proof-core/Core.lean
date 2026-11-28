@@ -455,6 +455,7 @@ inductive Known where
   | use (f : String) (keys : List Key) (h : Nat)    -- the definition `f`, used with these things, gives something; `h` is that use's own number (an unknown's number, which no row speaks of)
   | record (h : Nat) (fields : List RecField) (ids : List Nat) -- the value decoded from `h` is a record with exact `fields`, whose serialized 32-bit words are `ids`
   | word32 (lo hi : Nat)          -- every unknown `v` with `lo ≤ v < hi` lies in `[0, 2^32)`
+  | termVal (v id : Nat)          -- the unknown `v` is the 32-bit word `den (inpOf ctx s0) ρ T id` (in `[0, 2^32)`)
   deriving DecidableEq, Repr, Inhabited
 
 /-- What is known NOT to be marked (not to depend on values kept out of the trace): general registers, the two flags, and
@@ -866,26 +867,277 @@ def knownLoad (j c : Nat) : List Known → Option Nat
   | .load v j' c' :: more => if j' = j ∧ c' = c then some v else knownLoad j c more
   | _ :: more => knownLoad j c more
 
-/-- Eight bytes of a run of a fixed count given to read, at a place that is a number: one number, the
-lowest byte first. One unknown stands for one place of one run. It is a number below 2^64, and below what
-the contract says of the number at that place (`mbounds`: the caller has seen to it). -/
-def symLoadFixed (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
+/-- An unknown already known to hold the 32-bit word of term `id`. -/
+def knownTermVal (id : Nat) : List Known → Option Nat
+  | [] => none
+  | .termVal v id' :: more => if id' = id then some v else knownTermVal id more
+  | _ :: more => knownTermVal id more
+
+/-- A term already known to be denoted by scalar unknown `v`. -/
+def knownVarTerm (v : Nat) : List Known → Option Nat
+  | [] => none
+  | .termVal v' id :: more => if v' = v then some id else knownVarTerm v more
+  | _ :: more => knownVarTerm v more
+
+/-- If scalar unknown `v` is the canonical remainder `q + 1` of `Known.div x 2^32 q`, return `x`. -/
+def knownDivRem (v : Nat) : List Known → Option Row
+  | [] => none
+  | .div x m q :: more => if m == W32i && q + 1 == v then some x else knownDivRem v more
+  | _ :: more => knownDivRem v more
+
+/-- Pull out variables `v` that have a `Known.termVal v id` in `known` (with `id < t.arr.size`)
+from a row's coefficient list, returning `(pulled, terms, remaining_coeff)`. -/
+def splitTermCoeffs (known : List Known) (t : Tab) : List Int → Nat → Bool × List (Nat × Nat) × List Int
+  | [], _ => (false, [], [])
+  | c :: cs, v =>
+    let (p, ts, rem) := splitTermCoeffs known t cs (v + 1)
+    let cm := (c % W32i).toNat
+    if cm != 0 then
+      match knownVarTerm v known with
+      | some id =>
+        if id < t.arr.size then
+          let add := if cm == 1 then addends t id else [(id, cm)]
+          (true, mergeAdd add ts, 0 :: rem)
+        else (p, ts, c :: rem)
+      | none => (p, ts, c :: rem)
+    else (p, ts, 0 :: rem)
+
+/-- Convert a linear row `r` (mod 2^32) into a 32-bit word term ID in `t`, resolving a canonical
+mod-2^32 remainder (`Known.div x 2^32 q`) and any scalar `Known.termVal` variables back to their
+underlying `Tab` term IDs (lossless `Tab ↔ Row` bridge). -/
+def wAtomK (known : List Known) (r : Row) (t : Tab) : Nat × Tab :=
+  let w0 := Lin.word r
+  let r' := match (if w0.constant == 0 then varIdx w0.coeff 0 else none).bind (fun v => knownDivRem v known) with
+    | some x => x
+    | none => r
+  let w := Lin.word r'
+  let (pulled, ts, rem) := splitTermCoeffs known t w.coeff 0
+  if !pulled then wAtom r t
+  else
+    let remRow : Row := ⟨Lin.strip rem, w.constant⟩
+    if remRow == Lin.const 0 then
+      match ts with
+      | [] => wAtom (Lin.const 0) t
+      | [(id, 1)] => (id, t)
+      | _ => intern (.add ts) t
+    else
+      let (rid, t1) := wAtom remRow t
+      if ts.isEmpty then (rid, t1)
+      else intern (.add (mergeAdd [(rid, 1)] ts)) t1
+
+/-- A linear row for the 32-bit word term `id`: directly its `atom` row if known in `[0, 2^32)`,
+reusing an existing `Known.termVal` unknown if present, or allocating one fresh unknown in `[0, 2^32)`. -/
+def valOfTerm (s : Sym) (id : Nat) : Row × Sym :=
+  let reuse := match s.tab.arr[id]? with
+    | some (.atom r) => if isWord32Row s r then some r else none
+    | _ => none
+  match reuse with
+  | some r => (r, s)
+  | none =>
+    match knownTermVal id s.known with
+    | some v => (Lin.var v, s)
+    | none =>
+      let v := s.nvars
+      (Lin.var v, { s with nvars := v + 1,
+                           known := .termVal v id :: .word32 v (v + 1) :: s.known })
+
+/-- A term for each thing of a list, made one after another: their numbers, and the table then. -/
+def termsOf {α : Type} (mk : α → Tab → Nat × Tab) : List α → Tab → List Nat × Tab
+  | a :: as, t => ((mk a t).1 :: (termsOf mk as (mk a t).2).1, (termsOf mk as (mk a t).2).2)
+  | [], t => ([], t)
+
+/-- The runs whose words are terms (`Node.input`), by their numbers: the runs of a fixed count given to
+read, then those given to read and write, then the runs of bytes with a length, then the read-only value
+arrays (each with the register its address is in). -/
+def Contract.wordRuns (c : Contract) : List (String × Nat × Nat) :=
+  c.fixeds ++ c.inouts ++ (c.regions.map fun rl => ("", rl.1, 0)) ++ (c.valArrays.map fun va => (va.1, va.2.1, 0))
+
+/-- Find a read-only value array matching `addr = var r + c` with `0 ≤ c` and `c % 4 = 0`. -/
+def findValArray (addr : Row) : List (String × Nat × Nat × Nat × Nat) → Nat → Option (Nat × String × Nat × Nat × Nat × Nat × Int)
+  | [], _ => none
+  | (x, r, l, ch, el) :: more, k =>
+    match Lin.isConst (Lin.sub addr (Lin.var r)) with
+    | some c => if 0 ≤ c ∧ c % 4 = 0 then some (k, x, r, l, ch, el, c) else findValArray addr more (k + 1)
+    | none => findValArray addr more (k + 1)
+
+/-- Which run of words is at the address a register held at entry. -/
+def runAt (r : Nat) : List (String × Nat × Nat) → Nat → Option Nat
+  | [], _ => none
+  | (_, r', _) :: more, j => if r' = r then some j else runAt r more (j + 1)
+
+/-- Two 32-bit word rows from an 8-byte frame cell at `o` (so many bytes from where the stack pointer was at
+entry): the low word and high word, where the cell is known and its low 32 bits lie in `[0, 2^32)`. -/
+def frameCellWords (s : Sym) (o : Int) : Option (Row × Row) :=
+  match s.frame.find? (fun cell => cell.1 == o) with
+  | some (_, x) =>
+    if isWord32Row s (Lin.word x) then
+      some (x, Lin.high x)
+    else none
+  | none => none
+
+/-- `pairs` 8-byte frame cells from `o` on as `2 * pairs` 32-bit word rows. -/
+def framePairRows (s : Sym) (o : Int) : Nat → Option (List Row)
+  | 0 => some []
+  | pairs + 1 =>
+    match frameCellWords s o, framePairRows s (o + 8) pairs with
+    | some (lo, hi), some rest => some (lo :: hi :: rest)
+    | _, _ => none
+
+/-- If unknown `v` came from an 8-byte fixed-buffer load (`Known.load v j c0`), return `(j, c0)`. -/
+def knownLoadOf (v : Nat) : List Known → Option (Nat × Nat)
+  | [] => none
+  | .load v' j c0 :: more => if v' = v then some (j, c0) else knownLoadOf v more
+  | _ :: more => knownLoadOf v more
+
+/-- Two 32-bit input word nodes from an 8-byte frame cell holding a `Known.load` of a 4-byte-aligned
+fixed buffer offset (enabling vector or scalar-word reloads after 8-byte fixed loads spilled to stack). -/
+def frameCellNodes (s : Sym) (o : Int) : Option (Node × Node) :=
+  match s.frame.find? (fun cell => cell.1 == o) with
+  | some (_, x) =>
+    match (if x.constant == 0 then varIdx x.coeff 0 else none).bind (fun v => knownLoadOf v s.known) with
+    | some (j, c0) => if c0 % 4 = 0 then some (.input j (c0 / 4), .input j (c0 / 4 + 1)) else none
+    | none => none
+  | none => none
+
+/-- `pairs` 8-byte `Known.load` frame cells from `o` on as `2 * pairs` input word nodes. -/
+def framePairNodes (s : Sym) (o : Int) : Nat → Option (List Node)
+  | 0 => some []
+  | pairs + 1 =>
+    match frameCellNodes s o, framePairNodes s (o + 8) pairs with
+    | some (lo, hi), some rest => some (lo :: hi :: rest)
+    | _, _ => none
+
+/-- `count` consecutive 4-byte word term IDs from `s.frameW` starting at offset `o`. -/
+def frameWIds (fw : List (Int × Nat)) (o : Int) : Nat → Nat → Option (List Nat)
+  | 0, _ => some []
+  | count + 1, k =>
+    match fw.find? (fun e => e.1 == o + 4 * (k : Int)), frameWIds fw o count (k + 1) with
+    | some (_, id), some rest => some (id :: rest)
+    | _, _ => none
+
+/-- `count` consecutive 4-byte word term IDs from `s.wroteW` for run `w` starting at word `base`. -/
+def wroteWIds (ww : List (Nat × Nat × Nat)) (w base : Nat) : Nat → Nat → Option (List Nat)
+  | 0, _ => some []
+  | count + 1, k =>
+    match ww.find? (fun e => e.1 == w && e.2.1 == base + k), wroteWIds ww w base count (k + 1) with
+    | some (_, _, id), some rest => some (id :: rest)
+    | _, _ => none
+
+/-- Read words at a fixed offset divisible by four. They must lie in a read-only run, a read/write run
+(entry words if intact, else written words in `s.wroteW`), known 8-byte cells / 4-byte word terms of the
+stack frame, or a read-only value array. -/
+def symLoadWords (ctx : Ctx) (s : Sym) (addr : Row) (width : Nat) : V (List Nat × Sym) :=
+  let bytes := if width = 4 then "sixteen" else if width = 1 then "four" else if width = 2 then "eight" else "sixty-four"
+  let badSize := if width = 4 then "sixteen bytes that are not four words of the run"
+                 else if width = 1 then "four bytes that are not a word of the run"
+                 else if width = 2 then "eight bytes that are not two words of the run"
+                 else "sixty-four bytes that are not sixteen words of the run"
   match findOut addr ctx.contract.fixeds 0 with
   | some (.out j off) =>
     match Lin.isConst off, ctx.contract.fixeds[j]? with
-    | some c, some (name, _, count) =>
-      if size = 8 ∧ 0 ≤ c ∧ c + 8 ≤ count then
-        match knownLoad j c.toNat s.known with
-        | some v => pure (.lin (Lin.var v), s)
-        | none =>
-          pure (.lin (Lin.var s.nvars),
-            { s with nvars := s.nvars + 1, known := .load s.nvars j c.toNat :: s.known,
-                     facts := ranged s.nvars ++
-                       (ctx.contract.mbounds.filterMap fun (x, o, b) =>
-                         if x == name ∧ o = c.toNat then some (Lin.sub (Lin.const ((b : Int) - 1)) (Lin.var s.nvars)) else none) ++ s.facts })
-      else refuse "a read of a run of a fixed count that is not eight bytes within it: not here yet"
-    | _, _ => refuse "a read of a run of a fixed count at a place that is no number: not here yet"
-  | _ => refuse "a read that is neither of the frame nor of a run given"
+    | some c, some (_, _, count) =>
+      if 0 ≤ c ∧ c % 4 = 0 ∧ c + 4 * width ≤ count then
+        let made := termsOf intern ((List.range width).map fun i => Node.input j (c.toNat / 4 + i)) s.tab
+        pure (made.1, { s with tab := made.2 })
+      else refuse badSize
+    | _, _ => refuse s!"{bytes} bytes at a place of a run that is no number"
+  | _ =>
+    match findOut addr ctx.contract.outs 0 with
+    | some (.out w off) =>
+      match Lin.isConst off, ctx.contract.outs[w]? with
+      | some c, some (_, r, n) =>
+        match runAt r (ctx.contract.fixeds ++ ctx.contract.inouts) 0 with
+        | some j =>
+          match (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? with
+          | some (_, _, n') =>
+            if 0 ≤ c ∧ c % 4 = 0 ∧ c + 4 * width ≤ n ∧ c + 4 * width ≤ n' then
+              if s.intact.contains w then
+                let made := termsOf intern ((List.range width).map fun i => Node.input j (c.toNat / 4 + i)) s.tab
+                pure (made.1, { s with tab := made.2 })
+              else
+                match wroteWIds s.wroteW w (c.toNat / 4) width 0 with
+                | some ids => pure (ids, s)
+                | none => refuse "a read of a run given to read and write after it was written to: not here yet"
+            else refuse badSize
+          | none => refuse s!"{bytes} bytes of a run given only to write"
+        | none => refuse s!"{bytes} bytes of a run given only to write"
+      | _, _ => refuse s!"{bytes} bytes at a place of a run that is no number"
+    | _ =>
+      match Lin.isConst (Lin.sub addr (Lin.var RSP)), s.sp with
+      | some o, some sp =>
+        if sp ≤ o ∧ o + 4 * (width : Int) ≤ 0 then
+          match (if width % 2 = 0 then framePairRows s o (width / 2) else none) with
+          | some rows =>
+            let made := termsOf (wAtomK s.known) rows s.tab
+            pure (made.1, { s with tab := made.2 })
+          | none =>
+            match (if width % 2 = 0 then framePairNodes s o (width / 2) else none) with
+            | some nodes =>
+              let made := termsOf intern nodes s.tab
+              pure (made.1, { s with tab := made.2 })
+            | none =>
+              match frameWIds s.frameW o width 0 with
+              | some ids => pure (ids, s)
+              | none => refuse s!"{bytes} bytes of the frame that are not known words"
+        else refuse s!"{bytes} bytes that are of no run of words given to read"
+      | _, _ =>
+        match findValArray addr ctx.contract.valArrays 0 with
+        | some (k, _, _, l, ch, el, c) =>
+          let i := c.toNat / el
+          if 0 < ch ∧ 0 < el ∧ el % 4 = 0 ∧ c.toNat + 4 * width ≤ el * (i + 1) then do
+            entail s.facts (Lin.sub (Lin.var l) (Lin.const ((i + 1) * ch)))
+            let j := ctx.contract.fixeds.length + ctx.contract.inouts.length + ctx.contract.regions.length + k
+            let made := termsOf intern ((List.range width).map fun m => Node.input j (c.toNat / 4 + m)) s.tab
+            pure (made.1, { s with tab := made.2 })
+          else refuse badSize
+        | none => refuse s!"{bytes} bytes that are of no run of words given to read"
+
+/-- Scalar 4-byte or 8-byte load backed by `symLoadWords` and `Known.termVal`:
+yields `r0` (for 4 bytes) or `r0 + 2^32 * r1` (for 8 bytes) uniformly across fixed buffers,
+in-out word buffers (before and after partial writes), `frameW` stack slots, and value arrays. -/
+def symLoadWordScalar (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) := do
+  if size = 4 then
+    let (ids, s1) ← symLoadWords ctx s addr 1
+    match ids with
+    | [id0] =>
+      let (r0, s2) := valOfTerm s1 id0
+      pure (.lin r0, s2)
+    | _ => refuse "four bytes did not yield one word"
+  else if size = 8 then
+    let (ids, s1) ← symLoadWords ctx s addr 2
+    match ids with
+    | [id0, id1] =>
+      let (r0, s2) := valOfTerm s1 id0
+      let (r1, s3) := valOfTerm s2 id1
+      pure (.lin (Lin.add r0 (Lin.scale W32i r1)), s3)
+    | _ => refuse "eight bytes did not yield two words"
+  else refuse "a read of a word-backed run must be four or eight bytes"
+
+/-- Eight bytes of a run of a fixed count given to read, at a place that is a number: one number, the
+lowest byte first. One unknown stands for one place of one run. It is a number below 2^64, and below what
+the contract says of the number at that place (`mbounds`: the caller has seen to it). Four-byte loads
+(and value-array loads) delegate uniformly to `symLoadWordScalar`. -/
+def symLoadFixed (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
+  match findOut addr ctx.contract.fixeds 0 with
+  | some (.out j off) =>
+    if size = 4 then symLoadWordScalar ctx s addr 4
+    else
+      match Lin.isConst off, ctx.contract.fixeds[j]? with
+      | some c, some (name, _, count) =>
+        if size = 8 ∧ 0 ≤ c ∧ c + 8 ≤ count then
+          match knownLoad j c.toNat s.known with
+          | some v => pure (.lin (Lin.var v), s)
+          | none =>
+            pure (.lin (Lin.var s.nvars),
+              { s with nvars := s.nvars + 1, known := .load s.nvars j c.toNat :: s.known,
+                       facts := ranged s.nvars ++
+                         (ctx.contract.mbounds.filterMap fun (x, o, b) =>
+                           if x == name ∧ o = c.toNat then some (Lin.sub (Lin.const ((b : Int) - 1)) (Lin.var s.nvars)) else none) ++ s.facts })
+        else refuse "a read of a run of a fixed count that is not eight bytes within it: not here yet"
+      | _, _ => refuse "a read of a run of a fixed count at a place that is no number: not here yet"
+  | _ =>
+    if (size = 4 ∨ size = 8) ∧ (findValArray addr ctx.contract.valArrays 0).isSome then symLoadWordScalar ctx s addr size
+    else refuse "a read that is neither of the frame nor of a run given"
 
 def symLoad (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
   match locate ctx addr with
@@ -893,7 +1145,10 @@ def symLoad (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
     if size = 8 ∧ inFrame ctx s c = true then
       match s.frame.lookup c with
       | some v => pure (.lin v, s)
-      | none => refuse "a read of the frame where nothing was written"
+      | none =>
+        if (frameWIds s.frameW c 2 0).isSome then symLoadWordScalar ctx s addr 8
+        else refuse "a read of the frame where nothing was written"
+    else if size = 4 then symLoadWordScalar ctx s addr 4
     else refuse "a read of the frame that is not eight bytes of the frame in use"
   | some (.region r o) =>
     if size = 1 then do
@@ -903,7 +1158,9 @@ def symLoad (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
       let (v, s) ← readBytes ctx s r o size
       pure (.lin v, s)
     else refuse "a read of a run of bytes that is not one, two, four or eight bytes: not here yet"
-  | some (.out _ _) => refuse "a read of a run given only to write"
+  | some (.out _ _) =>
+    if size = 4 ∨ size = 8 then symLoadWordScalar ctx s addr size
+    else refuse "a read of a run given only to write"
   | some (.data c) =>
     -- the file's read-only data: the bytes are the file's, so what is read is a plain number
     if (size = 1 ∨ size = 4 ∨ size = 8) ∧ 0 ≤ c ∧ c + size ≤ ctx.data.length then
@@ -1090,14 +1347,36 @@ def takeWrapIf (skip : Bool) : V Bool := fun items =>
   | some (.tag "wrap" _) => .ok (true, { items with next := items.next + 1 })
   | _ => .ok (false, items)
 
+/-- Fast non-negative upper bound on `dot cs (fun k => ρ (i + k))` when every non-zero coefficient is
+positive and each variable is covered by `Known.word32` (never consults `s.facts`, so existing scalar
+and byte proof streams stay identical). -/
+def rowWord32UpperAux (known : List Known) : List Int → Nat → Option Int
+  | [], _ => some 0
+  | c :: cs, i =>
+    if c == 0 then rowWord32UpperAux known cs (i + 1)
+    else if c < 0 || !inWord32 i known then none
+    else (rowWord32UpperAux known cs (i + 1)).map (c * (W32i - 1) + ·)
+
+def rowWord32Upper (known : List Known) (r : Row) : Option Int :=
+  if r.constant < 0 || r.coeff.isEmpty then none
+  else (rowWord32UpperAux known r.coeff 0).map (r.constant + ·)
+
+/-- Fast check that `0 ≤ ev ρ r < 2^64` via `s.facts` or `rowWord32Upper` (covering sums of `Known.word32`
+words without adding linear facts to `s.facts` or changing existing scalar/byte proof streams). -/
+def inRangeFast (s : Sym) (r : Row) : Bool :=
+  (plain s.facts r && plain s.facts (Lin.sub (Lin.const (M64 - 1)) r)) ||
+  match rowWord32Upper s.known r with
+  | some u => decide (u < (M64 : Int))
+  | none => false
+
 def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
   if f == "add64" || f == "at" then do
     let raw := Lin.add x y
-    if plain s.facts raw && plain s.facts (Lin.sub (Lin.const (M64 - 1)) raw) then
+    if inRangeFast s raw then
       pure (.lin raw, s)
     else
       let r := Lin.add (signed x) (signed y)
-      let w ← takeWrapIf (plain s.facts r && plain s.facts (Lin.sub (Lin.const (M64 - 1)) r))
+      let w ← takeWrapIf (inRangeFast s r)
       if w then
         let d := symLow s (Lin.add x y) (M64 : Int)
         pure (.lin d.1, d.2)
@@ -1239,114 +1518,6 @@ def symReg (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → Option Row
     | none => none
   | _ => none
 
-/-- A term for each thing of a list, made one after another: their numbers, and the table then. -/
-def termsOf {α : Type} (mk : α → Tab → Nat × Tab) : List α → Tab → List Nat × Tab
-  | a :: as, t => ((mk a t).1 :: (termsOf mk as (mk a t).2).1, (termsOf mk as (mk a t).2).2)
-  | [], t => ([], t)
-
-/-- The runs whose words are terms (`Node.input`), by their numbers: the runs of a fixed count given to
-read, then those given to read and write, then the runs of bytes with a length, then the read-only value
-arrays (each with the register its address is in). -/
-def Contract.wordRuns (c : Contract) : List (String × Nat × Nat) :=
-  c.fixeds ++ c.inouts ++ (c.regions.map fun rl => ("", rl.1, 0)) ++ (c.valArrays.map fun va => (va.1, va.2.1, 0))
-
-/-- Find a read-only value array matching `addr = var r + c` with `0 ≤ c` and `c % 4 = 0`. -/
-def findValArray (addr : Row) : List (String × Nat × Nat × Nat × Nat) → Nat → Option (Nat × String × Nat × Nat × Nat × Nat × Int)
-  | [], _ => none
-  | (x, r, l, ch, el) :: more, k =>
-    match Lin.isConst (Lin.sub addr (Lin.var r)) with
-    | some c => if 0 ≤ c ∧ c % 4 = 0 then some (k, x, r, l, ch, el, c) else findValArray addr more (k + 1)
-    | none => findValArray addr more (k + 1)
-
-/-- Which run of words is at the address a register held at entry. -/
-def runAt (r : Nat) : List (String × Nat × Nat) → Nat → Option Nat
-  | [], _ => none
-  | (_, r', _) :: more, j => if r' = r then some j else runAt r more (j + 1)
-
-/-- Two 32-bit word rows from an 8-byte frame cell at `o` (so many bytes from where the stack pointer was at
-entry): the low word and high word, where the cell is known and its low 32 bits lie in `[0, 2^32)`. -/
-def frameCellWords (s : Sym) (o : Int) : Option (Row × Row) :=
-  match s.frame.find? (fun cell => cell.1 == o) with
-  | some (_, x) =>
-    if isWord32Row s (Lin.word x) then
-      some (x, Lin.high x)
-    else none
-  | none => none
-
-/-- `pairs` 8-byte frame cells from `o` on as `2 * pairs` 32-bit word rows. -/
-def framePairRows (s : Sym) (o : Int) : Nat → Option (List Row)
-  | 0 => some []
-  | pairs + 1 =>
-    match frameCellWords s o, framePairRows s (o + 8) pairs with
-    | some (lo, hi), some rest => some (lo :: hi :: rest)
-    | _, _ => none
-
-/-- `count` consecutive 4-byte word term IDs from `s.frameW` starting at offset `o`. -/
-def frameWIds (fw : List (Int × Nat)) (o : Int) : Nat → Nat → Option (List Nat)
-  | 0, _ => some []
-  | count + 1, k =>
-    match fw.find? (fun e => e.1 == o + 4 * (k : Int)), frameWIds fw o count (k + 1) with
-    | some (_, id), some rest => some (id :: rest)
-    | _, _ => none
-
-/-- Read words at a fixed offset divisible by four. They must lie in a read-only run, a read/write run
-that has not been written since entry, or known 8-byte cells / 4-byte word terms of the stack frame. -/
-def symLoadWords (ctx : Ctx) (s : Sym) (addr : Row) (width : Nat) : V (List Nat × Sym) :=
-  let bytes := if width = 4 then "sixteen" else if width = 1 then "four" else "sixty-four"
-  let badSize := if width = 4 then "sixteen bytes that are not four words of the run"
-                 else if width = 1 then "four bytes that are not a word of the run"
-                 else "sixty-four bytes that are not sixteen words of the run"
-  match findOut addr ctx.contract.fixeds 0 with
-  | some (.out j off) =>
-    match Lin.isConst off, ctx.contract.fixeds[j]? with
-    | some c, some (_, _, count) =>
-      if 0 ≤ c ∧ c % 4 = 0 ∧ c + 4 * width ≤ count then
-        let made := termsOf intern ((List.range width).map fun i => Node.input j (c.toNat / 4 + i)) s.tab
-        pure (made.1, { s with tab := made.2 })
-      else refuse badSize
-    | _, _ => refuse s!"{bytes} bytes at a place of a run that is no number"
-  | _ =>
-    match findOut addr ctx.contract.outs 0 with
-    | some (.out w off) =>
-      match Lin.isConst off, ctx.contract.outs[w]? with
-      | some c, some (_, r, n) =>
-        match runAt r (ctx.contract.fixeds ++ ctx.contract.inouts) 0 with
-        | some j =>
-          match (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? with
-          | some (_, _, n') =>
-            if !s.intact.contains w then refuse "a read of a run given to read and write after it was written to: not here yet"
-            else if 0 ≤ c ∧ c % 4 = 0 ∧ c + 4 * width ≤ n ∧ c + 4 * width ≤ n' then
-              let made := termsOf intern ((List.range width).map fun i => Node.input j (c.toNat / 4 + i)) s.tab
-              pure (made.1, { s with tab := made.2 })
-            else refuse badSize
-          | none => refuse s!"{bytes} bytes of a run given only to write"
-        | none => refuse s!"{bytes} bytes of a run given only to write"
-      | _, _ => refuse s!"{bytes} bytes at a place of a run that is no number"
-    | _ =>
-      match Lin.isConst (Lin.sub addr (Lin.var RSP)), s.sp with
-      | some o, some sp =>
-        if sp ≤ o ∧ o + 4 * (width : Int) ≤ 0 then
-          match (if width % 2 = 0 then framePairRows s o (width / 2) else none) with
-          | some rows =>
-            let made := termsOf wAtom rows s.tab
-            pure (made.1, { s with tab := made.2 })
-          | none =>
-            match frameWIds s.frameW o width 0 with
-            | some ids => pure (ids, s)
-            | none => refuse s!"{bytes} bytes of the frame that are not known words"
-        else refuse s!"{bytes} bytes that are of no run of words given to read"
-      | _, _ =>
-        match findValArray addr ctx.contract.valArrays 0 with
-        | some (k, _, _, l, ch, el, c) =>
-          let i := c.toNat / el
-          if 0 < ch ∧ 0 < el ∧ el % 4 = 0 ∧ c.toNat + 4 * width ≤ el * (i + 1) then do
-            entail s.facts (Lin.sub (Lin.var l) (Lin.const ((i + 1) * ch)))
-            let j := ctx.contract.fixeds.length + ctx.contract.inouts.length + ctx.contract.regions.length + k
-            let made := termsOf intern ((List.range width).map fun m => Node.input j (c.toNat / 4 + m)) s.tab
-            pure (made.1, { s with tab := made.2 })
-          else refuse badSize
-        | none => refuse s!"{bytes} bytes that are of no run of words given to read"
-
 /-- An unscaled address consists of a base register, a displacement and an optional index register. -/
 def symWordAddr (ctx : Ctx) (bind : Bind) (s : Sym) : List Expr → Option Row
   | [b, n] => do
@@ -1372,11 +1543,11 @@ division; else the row of the quotients by 2^32, the row of the remainders being
 def symHalves (s : Sym) (x : Row) : V (List Nat × Sym) :=
   if Lin.high x == Lin.const 0 && (Lin.isConst x).isNone then
     let d := symDivide s x W32i
-    let made := termsOf wAtom [d.2.1, d.1, Lin.const 0, Lin.const 0] d.2.2.tab
+    let made := termsOf (wAtomK d.2.2.known) [d.2.1, d.1, Lin.const 0, Lin.const 0] d.2.2.tab
     pure (made.1, { d.2.2 with tab := made.2 })
   else
-    let made := termsOf wAtom [x, Lin.high x, Lin.const 0, Lin.const 0] s.tab
-    if (Lin.isConst (Lin.word x)).isNone then do
+    let made := termsOf (wAtomK s.known) [x, Lin.high x, Lin.const 0, Lin.const 0] s.tab
+    if !isWord32Row s (Lin.word x) then do
       entail s.facts (Lin.word x)
       entail s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word x))
       pure (made.1, { s with tab := made.2 })
@@ -1658,7 +1829,7 @@ def symSpreadScalar16 (ctx : Ctx) (bind : Bind) (s : Sym) (a : Expr) : V (List N
   let (v, s) ← symValue ctx bind s a
   match v with
   | .lin x =>
-    let made := wAtom x s.tab
+    let made := wAtomK s.known x s.tab
     pure (List.replicate 16 made.1, { s with tab := made.2 })
   | _ => refuse "a flag where a word is expected"
 
@@ -1898,13 +2069,13 @@ def rememberStore (s : Sym) (w j : Nat) (l : List Nat) : Sym :=
                      s.wroteW.filter fun e => !(e.1 == w && decide (j ≤ e.2.1) && decide (e.2.1 < j + l.length)) }
 
 def symStoreWords (ctx : Ctx) (s : Sym) (addr : Row) (l : List Nat) (width : Nat) : V Sym :=
-  let bytes := if width = 4 then "sixteen" else "sixty-four"
+  let bytes := if width = 1 then "four" else if width = 4 then "sixteen" else "sixty-four"
   match findOut addr ctx.contract.outs 0 with
   | some (.out w off) =>
     match Lin.isConst off, ctx.contract.outs[w]? with
     | some c, some (_, _, count) =>
       if !(0 ≤ c ∧ c % 4 = 0 ∧ c + 4 * width ≤ count) then
-        refuse (if width = 4 then "sixteen bytes that are not four words of the run" else "sixty-four bytes that are not sixteen words of the run")
+        refuse (if width = 1 then "four bytes that are not a word of the run" else if width = 4 then "sixteen bytes that are not four words of the run" else "sixty-four bytes that are not sixteen words of the run")
       else if s.wrote.any (fun e => e.1 == w) then refuse "words written to a run that bytes were written to: not here yet"
       else if l.length != width then refuse "the vector store's width does not match its known lanes"
       else pure (rememberStore s w (c.toNat / 4) l)
@@ -1921,6 +2092,16 @@ def symStoreWords (ctx : Ctx) (s : Sym) (addr : Row) (l : List Nat) (width : Nat
       else refuse s!"{bytes} bytes written to what is no run given to write"
     | _, _ => refuse s!"{bytes} bytes written to what is no run given to write"
 
+/-- Four bytes, a number's low 32-bit word, stored into either a run given to write (preserving entry words
+of an intact read/write run via `Sym.touch`) or the stack frame (`frameW`), delegating directly to
+`symStoreWords` at width 1. -/
+def symStore4 (ctx : Ctx) (s : Sym) (addr x : Row) : V Sym :=
+  let s0 := match findOut addr ctx.contract.outs 0 with
+    | some (.out w _) => s.touch ctx w
+    | _ => s
+  let lo := wAtomK s0.known x s0.tab
+  symStoreWords ctx { s0 with tab := lo.2 } addr [lo.1] 1
+
 /-- Eight bytes, a number, stored at a place of the run `w` given to write (`n` bytes) that is a number
 divisible by four: two words of the run now hold the number's low half and its high half (the quotient by
 2^32, as a shift finds it). A run given to read and write that nothing was written to is first taken as
@@ -1936,13 +2117,13 @@ def symStore8 (ctx : Ctx) (s : Sym) (w n : Nat) (o x : Row) : V Sym :=
         -- divided. So a cell that two known words make gives those two words back. Any other number is
         -- divided, so that the specification's division of it finds the same quotient.)
         let t := s.touch ctx w
-        let lo := wAtom x t.tab
-        let hi := wAtom (Lin.high x) lo.2
+        let lo := wAtomK t.known x t.tab
+        let hi := wAtomK t.known (Lin.high x) lo.2
         pure (rememberStore { t with tab := hi.2 } w (c.toNat / 4) [lo.1, hi.1])
       else
         let d := symDivide (s.touch ctx w) x W32i
-        let lo := wAtom x d.2.2.tab
-        let hi := wAtom d.1 lo.2
+        let lo := wAtomK d.2.2.known x d.2.2.tab
+        let hi := wAtomK d.2.2.known d.1 lo.2
         pure (rememberStore { d.2.2 with tab := hi.2 } w (c.toNat / 4) [lo.1, hi.1])
     else refuse "eight bytes that are not two words of the run, or of a run that single bytes were written to"
   | none => refuse "eight bytes at a place of a run that is no number"
@@ -2025,6 +2206,7 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
               pure { s with spill := [],
                             frame := (c, x) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o),
                             frameW := s.frameW.filter fun (o, _) => decide (o + 4 ≤ c) || decide (c + 8 ≤ o) }
+            else if memSize f = some 4 then symStore4 ctx s (Lin.add (signed a) (signed b)) x
             else refuse "a write that is not eight bytes of the frame in use"
           | some (.out w o) =>
             -- one byte, at a place shown to be within the run, the byte shown to be one (0 to 255)
@@ -2043,7 +2225,8 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
                   pure { s with wrote := (w, o, x) :: rest, intact := s.intact.filter (· != w), spill := [] }
                 | none => refuse "a write at a place not known apart from one written before: not here yet"
               else if memSize f = some 8 then symStore8 ctx s w n o x        -- (eight bytes: a number, as two words)
-              else refuse "a write of two or four bytes to a run given to write: not here yet"
+              else if memSize f = some 4 then symStore4 ctx s (Lin.add (signed a) (signed b)) x
+              else refuse "a write of two bytes to a run given to write: not here yet"
             | none => refuse "no such run of bytes"
           | none =>
             let addr := Lin.add (signed a) (signed b)
@@ -2801,12 +2984,17 @@ def wbin (look : Node → Option Nat) (s : Sym) (op : String) : WVal → WVal �
   | .list a, .list b => if op == "++" then some (.list (a ++ b)) else none
   | _, _ => none
 
-/-- Term ID of the low 32-bit word `r % 2^32`: directly as `atom (Lin.word r)`, or via the
-canonical remainder `q + 1` where `s.known` records `Known.div r 2^32 q`. -/
+/-- Term ID of the low 32-bit word `r % 2^32`: directly as `atom (Lin.word r)`, via `Known.termVal`
+if `Lin.word r` is a single word-backed scalar variable, or via the canonical remainder `q + 1` of
+`Known.div r 2^32 q`. -/
 def atomId (look : Node → Option Nat) (s : Sym) (r : Row) : Option Nat :=
   match look (.atom (Lin.word r)) with
   | some i => some i
-  | none => (divided s r W32i).bind fun q => look (.atom (Lin.var (q + 1)))
+  | none =>
+    let w := Lin.word r
+    match (if w.constant == 0 then varIdx w.coeff 0 else none).bind (fun v => knownVarTerm v s.known) with
+    | some i => if i < s.terms.length then some i else none
+    | none => (divided s r W32i).bind fun q => look (.atom (Lin.var (q + 1)))
 
 /-- The high word of a counter that is a number and a number of the text more (`t + 5`), as code works it
 out from the two words of the first number: the low words summed wrap exactly where the sum comes out below

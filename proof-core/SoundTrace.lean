@@ -2364,30 +2364,215 @@ theorem symPrim1_lin {f : String} {s s1 : Sym} {x : Row} {val : EV} {items rest 
       have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, symLow_flags s x _⟩
     · rw [if_neg h2] at h; exact (refuse_ok h).elim
 
+theorem symLoadWords_flags {ctx : Ctx} {s s1 : Sym} {addr : Row} {w : Nat} {l : List Nat} {items rest : Items}
+    (h : symLoadWords ctx s addr w items = .ok ((l, s1), rest)) : s1.zf = s.zf ∧ s1.cf = s.cf := by
+  have hval : ∀ {bytes badSize : String},
+      (match findValArray addr ctx.contract.valArrays 0 with
+       | some (k, _, _, l0, ch, el, c) =>
+         let i := c.toNat / el
+         if 0 < ch ∧ 0 < el ∧ el % 4 = 0 ∧ c.toNat + 4 * w ≤ el * (i + 1) then do
+           entail s.facts (Lin.sub (Lin.var l0) (Lin.const ((i + 1) * ch)))
+           let j := ctx.contract.fixeds.length + ctx.contract.inouts.length + ctx.contract.regions.length + k
+           let made := termsOf intern ((List.range w).map fun m => Node.input j (c.toNat / 4 + m)) s.tab
+           pure (made.1, { s with tab := made.2 })
+         else refuse badSize
+       | none => refuse s!"{bytes} bytes that are of no run of words given to read") items = .ok ((l, s1), rest) →
+      s1.zf = s.zf ∧ s1.cf = s.cf := by
+    intro bytes badSize h'
+    cases hfv : findValArray addr ctx.contract.valArrays 0 with
+    | none => simp only [hfv] at h'; exact (refuse_ok (items := items) h').elim
+    | some found =>
+      obtain ⟨k, _, _, l0, ch, el, c⟩ := found
+      simp only [hfv] at h'
+      split at h'
+      · obtain ⟨_, _, _, h'⟩ := V.bind_ok h'
+        have := V.pure_ok h'; injection this with h' _; injection h' with _ h'; subst h'; exact ⟨rfl, rfl⟩
+      · exact (refuse_ok (items := items) h').elim
+  have hframe : ∀ {bytes badSize : String},
+      (match Lin.isConst (Lin.sub addr (Lin.var RSP)), s.sp with
+       | some o, some sp =>
+         if sp ≤ o ∧ o + 4 * (w : Int) ≤ 0 then
+           match (if w % 2 = 0 then framePairRows s o (w / 2) else none) with
+           | some rows => let made := termsOf (wAtomK s.known) rows s.tab; pure (made.1, { s with tab := made.2 })
+           | none =>
+             match (if w % 2 = 0 then framePairNodes s o (w / 2) else none) with
+             | some nodes => let made := termsOf intern nodes s.tab; pure (made.1, { s with tab := made.2 })
+             | none =>
+               match frameWIds s.frameW o w 0 with
+               | some ids => pure (ids, s)
+               | none => refuse s!"{bytes} bytes of the frame that are not known words"
+         else refuse s!"{bytes} bytes that are of no run of words given to read"
+       | _, _ =>
+         match findValArray addr ctx.contract.valArrays 0 with
+         | some (k, _, _, l0, ch, el, c) =>
+           let i := c.toNat / el
+           if 0 < ch ∧ 0 < el ∧ el % 4 = 0 ∧ c.toNat + 4 * w ≤ el * (i + 1) then do
+             entail s.facts (Lin.sub (Lin.var l0) (Lin.const ((i + 1) * ch)))
+             let j := ctx.contract.fixeds.length + ctx.contract.inouts.length + ctx.contract.regions.length + k
+             let made := termsOf intern ((List.range w).map fun m => Node.input j (c.toNat / 4 + m)) s.tab
+             pure (made.1, { s with tab := made.2 })
+           else refuse badSize
+         | none => refuse s!"{bytes} bytes that are of no run of words given to read") items = .ok ((l, s1), rest) →
+      s1.zf = s.zf ∧ s1.cf = s.cf := by
+    intro bytes badSize h'
+    cases hc : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
+    | none => simp only [hc] at h'; exact hval h'
+    | some o =>
+      cases hsp : s.sp with
+      | none => simp only [hc, hsp] at h'; exact hval h'
+      | some sp =>
+        simp only [hc, hsp] at h'
+        split at h'
+        · cases hpr : (if w % 2 = 0 then framePairRows s o (w / 2) else none) <;> simp only [hpr] at h'
+          · cases hpn : (if w % 2 = 0 then framePairNodes s o (w / 2) else none) <;> simp only [hpn] at h'
+            · cases hfw : frameWIds s.frameW o w 0 <;> simp only [hfw] at h'
+              · exact (refuse_ok (items := items) h').elim
+              · have := V.pure_ok h'; injection this with h' _; injection h' with _ h'; subst h'; exact ⟨rfl, rfl⟩
+            · have := V.pure_ok h'; injection this with h' _; injection h' with _ h'; subst h'; exact ⟨rfl, rfl⟩
+          · have := V.pure_ok h'; injection this with h' _; injection h' with _ h'; subst h'; exact ⟨rfl, rfl⟩
+        · exact (refuse_ok (items := items) h').elim
+  unfold symLoadWords at h
+  cases hf : findOut addr ctx.contract.fixeds 0 with
+  | some loc =>
+    simp only [hf] at h
+    cases loc with
+    | out j off =>
+      dsimp only at h
+      cases hc : Lin.isConst off <;> simp only [hc] at h
+      · exact (refuse_ok (items := items) h).elim
+      · cases hg : ctx.contract.fixeds[j]? <;> simp only [hg] at h
+        · exact (refuse_ok (items := items) h).elim
+        · split at h
+          · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+          · exact (refuse_ok (items := items) h).elim
+    | frame _ | region _ _ | data _ =>
+      dsimp only at h
+      cases hf2 : findOut addr ctx.contract.outs 0 <;> simp only [hf2] at h
+      · exact hframe h
+      · rename_i loc2; cases loc2 with
+        | frame _ | region _ _ | data _ => dsimp only at h; exact hframe h
+        | out w0 off =>
+          dsimp only at h
+          cases hc : Lin.isConst off with
+          | none => simp only [hc] at h; exact (refuse_ok (items := items) h).elim
+          | some c =>
+            simp only [hc] at h
+            cases hg : ctx.contract.outs[w0]? <;> simp only [hg] at h
+            · exact (refuse_ok (items := items) h).elim
+            · rename_i p0; obtain ⟨_, r0, _⟩ := p0
+              cases hr : runAt r0 (ctx.contract.fixeds ++ ctx.contract.inouts) 0 <;> simp only [hr] at h
+              · exact (refuse_ok (items := items) h).elim
+              · rename_i j0; cases hj : (ctx.contract.fixeds ++ ctx.contract.inouts)[j0]? <;> simp only [hj] at h
+                · exact (refuse_ok (items := items) h).elim
+                · split at h
+                  · split at h
+                    · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+                    · cases hww : wroteWIds s.wroteW w0 (c.toNat / 4) w 0 with
+                      | some ids => simp only [hww] at h; have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+                      | none => simp only [hww] at h; exact (refuse_ok (items := items) h).elim
+                  · exact (refuse_ok (items := items) h).elim
+  | none =>
+    simp only [hf] at h
+    cases hf2 : findOut addr ctx.contract.outs 0 <;> simp only [hf2] at h
+    · exact hframe h
+    · rename_i loc2; cases loc2 with
+      | frame _ | region _ _ | data _ => dsimp only at h; exact hframe h
+      | out w0 off =>
+        dsimp only at h
+        cases hc : Lin.isConst off with
+        | none => simp only [hc] at h; exact (refuse_ok (items := items) h).elim
+        | some c =>
+          simp only [hc] at h
+          cases hg : ctx.contract.outs[w0]? <;> simp only [hg] at h
+          · exact (refuse_ok (items := items) h).elim
+          · rename_i p0; obtain ⟨_, r0, _⟩ := p0
+            cases hr : runAt r0 (ctx.contract.fixeds ++ ctx.contract.inouts) 0 <;> simp only [hr] at h
+            · exact (refuse_ok (items := items) h).elim
+            · rename_i j0; cases hj : (ctx.contract.fixeds ++ ctx.contract.inouts)[j0]? <;> simp only [hj] at h
+              · exact (refuse_ok (items := items) h).elim
+              · split at h
+                · split at h
+                  · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+                  · cases hww : wroteWIds s.wroteW w0 (c.toNat / 4) w 0 with
+                    | some ids => simp only [hww] at h; have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+                    | none => simp only [hww] at h; exact (refuse_ok (items := items) h).elim
+                · exact (refuse_ok (items := items) h).elim
+
+theorem valOfTerm_flags (s : Sym) (id : Nat) : (valOfTerm s id).2.zf = s.zf ∧ (valOfTerm s id).2.cf = s.cf := by
+  unfold valOfTerm; dsimp only
+  split
+  · exact ⟨rfl, rfl⟩
+  · cases knownTermVal id s.known <;> exact ⟨rfl, rfl⟩
+
+theorem symLoadWordScalar_lin {ctx : Ctx} {s s1 : Sym} {addr : Row} {sz : Nat} {val : EV} {items rest : Items}
+    (h : symLoadWordScalar ctx s addr sz items = .ok ((val, s1), rest)) : (∃ r, val = .lin r) ∧ s1.zf = s.zf ∧ s1.cf = s.cf := by
+  unfold symLoadWordScalar at h
+  split at h
+  · obtain ⟨⟨ids, s'⟩, _, e1, h⟩ := V.bind_ok h
+    have f1 := symLoadWords_flags e1
+    cases ids with
+    | nil => exact (refuse_ok h).elim
+    | cons id0 more =>
+      cases more with
+      | cons _ _ => exact (refuse_ok h).elim
+      | nil =>
+        have hp := V.pure_ok h; injection hp with hp _; injection hp with hv hs; subst hv hs
+        have f2 := valOfTerm_flags s' id0
+        exact ⟨⟨_, rfl⟩, f2.1.trans f1.1, f2.2.trans f1.2⟩
+  · split at h
+    · obtain ⟨⟨ids, s'⟩, _, e1, h⟩ := V.bind_ok h
+      have f1 := symLoadWords_flags e1
+      cases ids with
+      | nil => exact (refuse_ok h).elim
+      | cons id0 more =>
+        cases more with
+        | nil => exact (refuse_ok h).elim
+        | cons id1 more2 =>
+          cases more2 with
+          | cons _ _ => exact (refuse_ok h).elim
+          | nil =>
+            have hp := V.pure_ok h; injection hp with hp _; injection hp with hv hs; subst hv hs
+            have f2 := valOfTerm_flags s' id0
+            have f3 := valOfTerm_flags (valOfTerm s' id0).2 id1
+            exact ⟨⟨_, rfl⟩, f3.1.trans (f2.1.trans f1.1), f3.2.trans (f2.2.trans f1.2)⟩
+    · exact (refuse_ok h).elim
+
 theorem symLoadFixed_lin {ctx : Ctx} {s s1 : Sym} {addr : Row} {sz : Nat} {val : EV} {items rest : Items}
     (h : symLoadFixed ctx s addr sz items = .ok ((val, s1), rest)) : (∃ r, val = .lin r) ∧ s1.zf = s.zf ∧ s1.cf = s.cf := by
   unfold symLoadFixed at h
   cases hf : findOut addr ctx.contract.fixeds 0 with
-  | none => simp only [hf] at h; exact (refuse_ok h).elim
+  | none =>
+    simp only [hf] at h
+    split at h
+    · exact symLoadWordScalar_lin h
+    · exact (refuse_ok h).elim
   | some loc =>
     simp only [hf] at h
     cases loc with
-    | frame _ | region _ _ | data _ => exact (refuse_ok h).elim
+    | frame _ | region _ _ | data _ =>
+      dsimp only at h
+      split at h
+      · exact symLoadWordScalar_lin h
+      · exact (refuse_ok h).elim
     | out j off =>
-      cases hc : Lin.isConst off with
-      | none => simp only [hc] at h; exact (refuse_ok h).elim
-      | some c =>
-        cases hg : ctx.contract.fixeds[j]? with
-        | none => simp only [hc, hg] at h; exact (refuse_ok h).elim
-        | some p =>
-          obtain ⟨name, _, count⟩ := p
-          simp only [hc, hg] at h
-          by_cases hsz : sz = 8 ∧ 0 ≤ c ∧ c + 8 ≤ count
-          · simp only [hsz, ite_true] at h
-            cases hk : knownLoad j c.toNat s.known with
-            | some v => simp only [hk] at h; have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, rfl, rfl⟩
-            | none => simp only [hk] at h; have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, rfl, rfl⟩
-          · simp only [hsz, ite_false] at h; exact (refuse_ok h).elim
+      dsimp only at h
+      by_cases hsz4 : sz = 4
+      · rw [if_pos hsz4] at h; exact symLoadWordScalar_lin h
+      · rw [if_neg hsz4] at h
+        cases hc : Lin.isConst off with
+        | none => simp only [hc] at h; exact (refuse_ok h).elim
+        | some c =>
+          cases hg : ctx.contract.fixeds[j]? with
+          | none => simp only [hc, hg] at h; exact (refuse_ok h).elim
+          | some p =>
+            obtain ⟨name, _, count⟩ := p
+            simp only [hc, hg] at h
+            by_cases hsz : sz = 8 ∧ 0 ≤ c ∧ c + 8 ≤ count
+            · simp only [hsz, ite_true] at h
+              cases hk : knownLoad j c.toNat s.known with
+              | some v => simp only [hk] at h; have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, rfl, rfl⟩
+              | none => simp only [hk] at h; have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, rfl, rfl⟩
+            · simp only [hsz, ite_false] at h; exact (refuse_ok h).elim
 
 theorem readBytes_flags {ctx : Ctx} {r : Nat} :
     ∀ (n : Nat) {s s1 : Sym} {o v : Row} {items rest : Items},
@@ -2416,11 +2601,18 @@ theorem symLoad_lin {ctx : Ctx} {s s1 : Sym} {addr : Row} {sz : Nat} {val : EV} 
     | frame c =>
       dsimp only at h
       by_cases hfr : sz = 8 ∧ inFrame ctx s c = true
-      · simp only [hfr, ite_true] at h
+      · rw [if_pos hfr] at h
         cases hlu : s.frame.lookup c with
-        | none => simp only [hlu] at h; exact (refuse_ok (items := items) h).elim
+        | none =>
+          simp only [hlu] at h
+          split at h
+          · exact symLoadWordScalar_lin h
+          · exact (refuse_ok h).elim
         | some v => simp only [hlu] at h; have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, rfl, rfl⟩
-      · rw [if_neg hfr] at h; exact (refuse_ok h).elim
+      · rw [if_neg hfr] at h
+        by_cases hsz4 : sz = 4
+        · rw [if_pos hsz4] at h; exact symLoadWordScalar_lin h
+        · rw [if_neg hsz4] at h; exact (refuse_ok h).elim
     | region r o =>
       dsimp only at h
       by_cases hsz : sz = 1
@@ -2435,7 +2627,11 @@ theorem symLoad_lin {ctx : Ctx} {s s1 : Sym} {addr : Row} {sz : Nat} {val : EV} 
           have := V.pure_ok hp; injection this with h _; injection h with h1 h2; subst h1 h2
           exact ⟨⟨_, rfl⟩, readBytes_flags sz hr⟩
         · rw [if_neg hszm] at h; exact (refuse_ok h).elim
-    | out _ _ => dsimp only at h; exact (refuse_ok h).elim
+    | out _ _ =>
+      dsimp only at h
+      split at h
+      · exact symLoadWordScalar_lin h
+      · exact (refuse_ok h).elim
     | data c =>
       dsimp only at h
       by_cases hd : (sz = 1 ∨ sz = 4 ∨ sz = 8) ∧ 0 ≤ c ∧ c + sz ≤ ctx.data.length
@@ -2499,7 +2695,7 @@ theorem symPrim_flags {f : String} {s s1 : Sym} {x y : Row} {val : EV} {items re
   unfold symPrim at h
   by_cases h1 : (f == "add64" || f == "at") = true
   · simp only [h1, ite_true] at h
-    by_cases hraw : (plain s.facts (Lin.add x y) && plain s.facts (Lin.sub (Lin.const (M64 - 1)) (Lin.add x y))) = true
+    by_cases hraw : inRangeFast s (Lin.add x y) = true
     · simp only [hraw, ite_true] at h; exact ofLin _ _ _ h rfl rfl
     · simp only [hraw, ite_false] at h
       obtain ⟨w, _, _, h⟩ := V.bind_ok h
@@ -2754,10 +2950,10 @@ theorem symValue_flag_operands {ctx : Ctx} {p : Program} {a0 b0 sta stb : State}
                 | some b2 =>
                   simp only [hm1, hm2, Option.some.injEq, Bool.or_eq_false_iff] at hm
                   obtain ⟨rfl, rfl, _⟩ := hm
-                  obtain ⟨ρa1, va1, ca1, hve1a, va1lt, eva1, bda1⟩ := symValue_sound Ea bind e1 hsv1 Ha wf
-                  obtain ⟨ρa2, va2, ca2, hve2a, va2lt, eva2, bda2⟩ := symValue_sound Ea bind e2 hsv2 ca1.holds ca1.wf
-                  obtain ⟨ρb1, vb1, cb1, hve1b, vb1lt, evb1, bdb1⟩ := symValue_sound Eb bind e1 hsv1 Hb wf
-                  obtain ⟨ρb2, vb2, cb2, hve2b, vb2lt, evb2, bdb2⟩ := symValue_sound Eb bind e2 hsv2 cb1.holds cb1.wf
+                  obtain ⟨ρa1, va1, ca1, hve1a, va1lt, eva1, bda1⟩ := symValue_sound Ea (symLoadWordScalar_sound Ea) bind e1 hsv1 Ha wf
+                  obtain ⟨ρa2, va2, ca2, hve2a, va2lt, eva2, bda2⟩ := symValue_sound Ea (symLoadWordScalar_sound Ea) bind e2 hsv2 ca1.holds ca1.wf
+                  obtain ⟨ρb1, vb1, cb1, hve1b, vb1lt, evb1, bdb1⟩ := symValue_sound Eb (symLoadWordScalar_sound Eb) bind e1 hsv1 Hb wf
+                  obtain ⟨ρb2, vb2, cb2, hve2b, vb2lt, evb2, bdb2⟩ := symValue_sound Eb (symLoadWordScalar_sound Eb) bind e2 hsv2 cb1.holds cb1.wf
                   have ca := ca1.then ca2
                   have cb := cb1.then cb2
                   obtain ⟨aq1, em1⟩ := markOf_sound Ea Ma Ha wf ca e1 hm1
@@ -2793,127 +2989,6 @@ theorem symValue_flag_operands {ctx : Ctx} {p : Program} {a0 b0 sta stb : State}
 
 /-! ## Flag preservation across non-flag statements and `settle` -/
 
-theorem symLoadWords_flags {ctx : Ctx} {s s1 : Sym} {addr : Row} {w : Nat} {l : List Nat} {items rest : Items}
-    (h : symLoadWords ctx s addr w items = .ok ((l, s1), rest)) : s1.zf = s.zf ∧ s1.cf = s.cf := by
-  have hval : ∀ {bytes badSize : String},
-      (match findValArray addr ctx.contract.valArrays 0 with
-       | some (k, _, _, l0, ch, el, c) =>
-         let i := c.toNat / el
-         if 0 < ch ∧ 0 < el ∧ el % 4 = 0 ∧ c.toNat + 4 * w ≤ el * (i + 1) then do
-           entail s.facts (Lin.sub (Lin.var l0) (Lin.const ((i + 1) * ch)))
-           let j := ctx.contract.fixeds.length + ctx.contract.inouts.length + ctx.contract.regions.length + k
-           let made := termsOf intern ((List.range w).map fun m => Node.input j (c.toNat / 4 + m)) s.tab
-           pure (made.1, { s with tab := made.2 })
-         else refuse badSize
-       | none => refuse s!"{bytes} bytes that are of no run of words given to read") items = .ok ((l, s1), rest) →
-      s1.zf = s.zf ∧ s1.cf = s.cf := by
-    intro bytes badSize h'
-    cases hfv : findValArray addr ctx.contract.valArrays 0 with
-    | none => simp only [hfv] at h'; exact (refuse_ok (items := items) h').elim
-    | some found =>
-      obtain ⟨k, _, _, l0, ch, el, c⟩ := found
-      simp only [hfv] at h'
-      split at h'
-      · obtain ⟨_, _, _, h'⟩ := V.bind_ok h'
-        have := V.pure_ok h'; injection this with h' _; injection h' with _ h'; subst h'; exact ⟨rfl, rfl⟩
-      · exact (refuse_ok (items := items) h').elim
-  have hframe : ∀ {bytes badSize : String},
-      (match Lin.isConst (Lin.sub addr (Lin.var RSP)), s.sp with
-       | some o, some sp =>
-         if sp ≤ o ∧ o + 4 * (w : Int) ≤ 0 then
-           match (if w % 2 = 0 then framePairRows s o (w / 2) else none) with
-           | some rows => let made := termsOf wAtom rows s.tab; pure (made.1, { s with tab := made.2 })
-           | none =>
-             match frameWIds s.frameW o w 0 with
-             | some ids => pure (ids, s)
-             | none => refuse s!"{bytes} bytes of the frame that are not known words"
-         else refuse s!"{bytes} bytes that are of no run of words given to read"
-       | _, _ =>
-         match findValArray addr ctx.contract.valArrays 0 with
-         | some (k, _, _, l0, ch, el, c) =>
-           let i := c.toNat / el
-           if 0 < ch ∧ 0 < el ∧ el % 4 = 0 ∧ c.toNat + 4 * w ≤ el * (i + 1) then do
-             entail s.facts (Lin.sub (Lin.var l0) (Lin.const ((i + 1) * ch)))
-             let j := ctx.contract.fixeds.length + ctx.contract.inouts.length + ctx.contract.regions.length + k
-             let made := termsOf intern ((List.range w).map fun m => Node.input j (c.toNat / 4 + m)) s.tab
-             pure (made.1, { s with tab := made.2 })
-           else refuse badSize
-         | none => refuse s!"{bytes} bytes that are of no run of words given to read") items = .ok ((l, s1), rest) →
-      s1.zf = s.zf ∧ s1.cf = s.cf := by
-    intro bytes badSize h'
-    cases hc : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
-    | none => simp only [hc] at h'; exact hval h'
-    | some o =>
-      cases hsp : s.sp with
-      | none => simp only [hc, hsp] at h'; exact hval h'
-      | some sp =>
-        simp only [hc, hsp] at h'
-        split at h'
-        · cases hpr : (if w % 2 = 0 then framePairRows s o (w / 2) else none) <;> simp only [hpr] at h'
-          · cases hfw : frameWIds s.frameW o w 0 <;> simp only [hfw] at h'
-            · exact (refuse_ok (items := items) h').elim
-            · have := V.pure_ok h'; injection this with h' _; injection h' with _ h'; subst h'; exact ⟨rfl, rfl⟩
-          · have := V.pure_ok h'; injection this with h' _; injection h' with _ h'; subst h'; exact ⟨rfl, rfl⟩
-        · exact (refuse_ok (items := items) h').elim
-  unfold symLoadWords at h
-  cases hf : findOut addr ctx.contract.fixeds 0 with
-  | some loc =>
-    simp only [hf] at h
-    cases loc with
-    | out j off =>
-      dsimp only at h
-      cases hc : Lin.isConst off <;> simp only [hc] at h
-      · exact (refuse_ok (items := items) h).elim
-      · cases hg : ctx.contract.fixeds[j]? <;> simp only [hg] at h
-        · exact (refuse_ok (items := items) h).elim
-        · split at h
-          · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
-          · exact (refuse_ok (items := items) h).elim
-    | frame _ | region _ _ | data _ =>
-      dsimp only at h
-      cases hf2 : findOut addr ctx.contract.outs 0 <;> simp only [hf2] at h
-      · exact hframe h
-      · rename_i loc2; cases loc2 with
-        | frame _ | region _ _ | data _ => dsimp only at h; exact hframe h
-        | out w0 off =>
-          dsimp only at h
-          cases hc : Lin.isConst off <;> simp only [hc] at h
-          · exact (refuse_ok (items := items) h).elim
-          · cases hg : ctx.contract.outs[w0]? <;> simp only [hg] at h
-            · exact (refuse_ok (items := items) h).elim
-            · rename_i p0; obtain ⟨_, r0, _⟩ := p0
-              cases hr : runAt r0 (ctx.contract.fixeds ++ ctx.contract.inouts) 0 <;> simp only [hr] at h
-              · exact (refuse_ok (items := items) h).elim
-              · rename_i j0; cases hj : (ctx.contract.fixeds ++ ctx.contract.inouts)[j0]? <;> simp only [hj] at h
-                · exact (refuse_ok (items := items) h).elim
-                · split at h
-                  · exact (refuse_ok (items := items) h).elim
-                  · split at h
-                    · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
-                    · exact (refuse_ok (items := items) h).elim
-  | none =>
-    simp only [hf] at h
-    cases hf2 : findOut addr ctx.contract.outs 0 <;> simp only [hf2] at h
-    · exact hframe h
-    · rename_i loc2; cases loc2 with
-      | frame _ | region _ _ | data _ => dsimp only at h; exact hframe h
-      | out w0 off =>
-        dsimp only at h
-        cases hc : Lin.isConst off <;> simp only [hc] at h
-        · exact (refuse_ok (items := items) h).elim
-        · cases hg : ctx.contract.outs[w0]? <;> simp only [hg] at h
-          · exact (refuse_ok (items := items) h).elim
-          · rename_i p0; obtain ⟨_, r0, _⟩ := p0
-            cases hr : runAt r0 (ctx.contract.fixeds ++ ctx.contract.inouts) 0 <;> simp only [hr] at h
-            · exact (refuse_ok (items := items) h).elim
-            · rename_i j0; cases hj : (ctx.contract.fixeds ++ ctx.contract.inouts)[j0]? <;> simp only [hj] at h
-              · exact (refuse_ok (items := items) h).elim
-              · split at h
-                · exact (refuse_ok (items := items) h).elim
-                · split at h
-                  · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
-                  · exact (refuse_ok (items := items) h).elim
-
 theorem symMemWords_flags {ctx : Ctx} {bind : Bind} {s s1 : Sym} {args : List Expr} {w : Nat} {l : List Nat} {items rest : Items}
     (h : symMemWords ctx bind s args w items = .ok ((l, s1), rest)) : s1.zf = s.zf ∧ s1.cf = s.cf := by
   unfold symMemWords at h
@@ -2928,12 +3003,12 @@ theorem symHalves_flags {s s1 : Sym} {x : Row} {l : List Nat} {items rest : Item
   · simp only [h1, ite_true] at h
     have := V.pure_ok h; injection this with h _; injection h with _ h; subst h
     exact symDivide_flags s x W32i
-  · simp only [h1, ite_false] at h
-    by_cases h2 : (Lin.isConst (Lin.word x)).isNone = true
-    · simp only [h2, ite_true] at h
-      obtain ⟨_, _, _, h⟩ := V.bind_ok h; obtain ⟨_, _, _, h⟩ := V.bind_ok h
+  · simp only [h1, Bool.false_eq_true, ↓reduceIte] at h
+    by_cases h2 : isWord32Row s (Lin.word x) = true
+    · simp only [h2, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
       have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
-    · simp only [h2, ite_false] at h
+    · simp only [h2, Bool.not_false, ↓reduceIte] at h
+      obtain ⟨_, _, _, h⟩ := V.bind_ok h; obtain ⟨_, _, _, h⟩ := V.bind_ok h
       have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
 
 theorem symEach32_flags {bind : Bind} {s s1 : Sym} {args : List Expr} {l : List Nat} {items rest : Items}
@@ -3384,6 +3459,23 @@ theorem symStoreWords_flags {ctx : Ctx} {s s1 : Sym} {addr : Row} {l : List Nat}
           · exact (refuse_ok (items := items) h).elim
           · have := V.pure_ok h; injection this with h _; subst h
             unfold rememberStore; exact ⟨rfl, rfl⟩
+
+theorem symStore4_flags {ctx : Ctx} {s s1 : Sym} {addr x : Row} {items rest : Items}
+    (h : symStore4 ctx s addr x items = .ok (s1, rest)) : s1.zf = s.zf ∧ s1.cf = s.cf := by
+  unfold symStore4 at h
+  have ht : ∀ w, (s.touch ctx w).zf = s.zf ∧ (s.touch ctx w).cf = s.cf := by
+    intro w; unfold Sym.touch; cases ctx.contract.outs[w]? with
+    | none => exact ⟨rfl, rfl⟩
+    | some p => dsimp only; split
+                · cases runAt p.2.1 ctx.contract.wordRuns 0 <;> exact ⟨rfl, rfl⟩
+                · exact ⟨rfl, rfl⟩
+  have f := symStoreWords_flags h
+  cases hfo : findOut addr ctx.contract.outs 0 with
+  | none => simp only [hfo] at f; exact f
+  | some loc =>
+    cases loc with
+    | out w _ => simp only [hfo] at f; exact ⟨f.1.trans (ht w).1, f.2.trans (ht w).2⟩
+    | frame _ | region _ _ | data _ => simp only [hfo] at f; exact f
 
 theorem symStore8_flags {ctx : Ctx} {s s1 : Sym} {w n : Nat} {o x : Row} {items rest : Items}
     (h : symStore8 ctx s w n o x items = .ok (s1, rest)) : s1.zf = s.zf ∧ s1.cf = s.cf := by

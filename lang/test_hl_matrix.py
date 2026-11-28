@@ -1035,13 +1035,13 @@ fn read_off(buf: 256 bytes, b: number)
             imp = parsed["fns"][0]["impls"][arch]
             self.assertFalse(imp.get("hl_err"), f"index const-fold failed on {arch}: {imp.get('hl_err')}")
 
-        # Fix #4 (ode_tool.py): crisp hints for in-out word buffer, fixed-size u32, and vector-vs-scalar stack frame.
+        # Fix #4 (ode_tool.py): crisp hints for write-only buffers, fixed-size bounds, and stack slots.
         h1 = ode_tool._diagnostic_hint("refused: a read of a run given only to write", "x86_64", info={"hl_meta": True})
-        self.assertIn("u32x4", h1)
-        h2 = ode_tool._diagnostic_hint("refused: a read of a run of a fixed count that is not eight bytes within it", "arm64", info={"hl_meta": True})
-        self.assertIn("u32x4", h2)
+        self.assertIn("write-only", h1)
+        h2 = ode_tool._diagnostic_hint("refused: a read of a run of a fixed count that is not four or eight bytes within it", "arm64", info={"hl_meta": True})
+        self.assertIn("buf.u32(off)", h2)
         h3 = ode_tool._diagnostic_hint("refused: a read of the frame where nothing was written", "arm64", info={"hl_meta": True})
-        self.assertIn("stack var", h3)
+        self.assertIn("stack slots", h3)
 
     def test_13_hl_v5_forensic_bug_regressions(self):
         """TDD regressions for defects surfaced by hl-default-v5 forensics."""
@@ -2016,6 +2016,173 @@ fn f_bad_multi(buf: n bytes, n: number)
         spec_const = "const OP_EXIT = 149\ndef step(op, r0) {\n    if op == OP_EXIT then r0 else 0\n}\n"
         hits = ode_tool._matching_spec_comparisons(spec_const, [[-149, 1]], contract={"returns": "step(a0, a1)"})
         self.assertTrue(any("OP_EXIT = 149" in h for h in hits), hits)
+
+    def test_20_phase1_uniform_word_memory(self):
+        """Phase 1 cache-and-page memory model regressions:
+        1. `fixeds.u32` loads + scalar 32-bit addition (`wAtomK` round-trip to `Node.add`) on both arches.
+        2. `inouts.u64` & `inouts.u32` reads BEFORE and AFTER partial writes (`wroteW`) on both arches.
+        3. `frameW` (vector stack store) -> scalar `.u64` & `.u32` reads on both arches.
+        4. 4-byte scalar stores (`out.u32` & stack `buf.u32`) via `symStore4` on `arm64`.
+        5. Pure write-only `out` buffer STILL refused on read (preserving streaming / no-RFO safety).
+        6. `advice/estimate.py` static `stlf-width` hazard warning on 8B store -> 16B stack load.
+        """
+        # 1. Fixed read-only word buffer `.u32` + scalar 32-bit sum (`wAtomK` -> `Node.add`)
+        src_fixed_u32 = """\
+def sum_pairs(ws) {
+    [ws[0] + ws[1], ws[1] + ws[2], ws[2] + ws[3], ws[3] + ws[0]]
+}
+
+fn f_fixed_u32(out: 16 bytes, a: 16 bytes)
+    requires no_overlap(out, a)
+    ensures out = bytes_of(sum_pairs(words(a)))
+    trace depends on nothing
+{
+    let w0: u64 := a.u32(0)
+    let w1: u64 := a.u32(4)
+    let w2: u64 := a.u32(8)
+    let w3: u64 := a.u32(12)
+    let s0: u64 := (w0 +% w1) & 4294967295
+    let s1: u64 := (w1 +% w2) & 4294967295
+    let s2: u64 := (w2 +% w3) & 4294967295
+    let s3: u64 := (w3 +% w0) & 4294967295
+    out.u64(0) := s0 | (s1 << 32)
+    out.u64(8) := s2 | (s3 << 32)
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_fixed_u32, "f_fixed_u32", arch, check_v2=False)
+
+        # 2. In-out word buffer `.u64` & `.u32` reads BEFORE and AFTER partial write (`wroteW`)
+        src_inout_rw = """\
+def inout_spec(ws) {
+    [ws[0] + ws[2], ws[1] + ws[3], (ws[0] + ws[2]) + ws[2], (ws[1] + ws[3]) + ws[3]]
+}
+
+fn f_inout_rw(h: 16 bytes)
+    ensures h = bytes_of(inout_spec(words(h)))
+    trace depends on nothing
+{
+    let h01: u64 := h.u64(0)
+    let w0: u64 := h01 & 4294967295
+    let w1: u64 := h01 >> 32
+    let w2: u64 := h.u32(8)
+    let w3: u64 := h.u32(12)
+    let a: u64 := (w0 +% w2) & 4294967295
+    let b: u64 := (w1 +% w3) & 4294967295
+    h.u64(0) := a | (b << 32)
+    // Read back the just-written words from `h` (read-after-write via `wroteW`!)
+    let a_back: u64 := h.u32(0)
+    let b_back: u64 := h.u32(4)
+    let c: u64 := (a_back +% w2) & 4294967295
+    let d: u64 := (b_back +% w3) & 4294967295
+    h.u64(8) := c | (d << 32)
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_inout_rw, "f_inout_rw", arch, check_v2=False)
+
+        # 3. Vector stack store (`frameW`) -> scalar `.u64` & `.u32` loads
+        src_framew_scalar = """\
+def copy4(ws) { [ws[0], ws[1], ws[2], ws[3]] }
+
+fn f_framew_scalar(out: 16 bytes, src: 16 bytes)
+    requires no_overlap(out, src)
+    ensures out = bytes_of(copy4(words(src)))
+    trace depends on nothing
+{
+    buf tmp[16]
+    let v: u32x4 := src.u32x4(0)
+    tmp.u32x4(0) := v
+    let p01: u64 := tmp.u64(0)
+    let w2: u64 := tmp.u32(8)
+    let w3: u64 := tmp.u32(12)
+    out.u64(0) := p01
+    out.u64(8) := w2 | (w3 << 32)
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_framew_scalar, "f_framew_scalar", arch, check_v2=False)
+
+        # 4. 4-byte scalar stores (`buf.u32` & `out.u32`) on `arm64` via `symStore4`
+        src_store4 = """\
+def rev4(ws) { [ws[3], ws[2], ws[1], ws[0]] }
+
+fn f_store4(out: 16 bytes, src: 16 bytes)
+    requires no_overlap(out, src)
+    ensures out = bytes_of(rev4(words(src)))
+    trace depends on nothing
+{
+    buf tmp[16]
+    tmp.u32(0) := src.u32(12)
+    tmp.u32(4) := src.u32(8)
+    tmp.u32(8) := src.u32(4)
+    tmp.u32(12) := src.u32(0)
+    out.u32(0) := tmp.u32(0)
+    out.u32(4) := tmp.u32(4)
+    out.u32(8) := tmp.u32(8)
+    out.u32(12) := tmp.u32(12)
+}
+"""
+        _pack_and_dual_verify(src_store4, "f_store4", "arm64", check_v2=False)
+
+        # 5. Pure write-only `out` buffer (`arg out out N`) STILL refused on `.u32`/`.u64` read
+        src_wo_read = """\
+fn f_wo_read(out: 16 bytes, src: 16 bytes)
+    requires no_overlap(out, src)
+    ensures out = src
+    trace depends on nothing
+{
+    let bad: u64 := out.u32(0)
+    out.u64(0) := src.u64(0)
+    out.u64(8) := src.u64(8) +% (bad -% bad)
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory(prefix="ode_wo_") as td:
+                src_p = Path(td) / "wo.ode"
+                src_p.write_text(src_wo_read, encoding="utf-8")
+                with self.assertRaises(ode_audit.PackProofError) as ctx:
+                    ode_audit.pack_verified(
+                        str(src_p), None, str(Path(td) / "o.o"), str(Path(td) / "o.proof"),
+                        fn_name="f_wo_read", target=arch, c_abi=True, stores=STD_STORES,
+                    )
+                self.assertIn("given only to write", str(ctx.exception))
+
+        # 6. `ode advise` static `stlf-width` hazard hint (8B stack store -> 16B stack load)
+        src_stlf = """\
+def id4(ws) { [ws[0], ws[1], ws[2], ws[3]] }
+
+fn f_stlf(out: 16 bytes, src: 16 bytes)
+    requires no_overlap(out, src)
+    ensures out = bytes_of(id4(words(src)))
+    trace depends on nothing
+{
+    buf tmp[16]
+    let a: u64 := src.u64(0)
+    let b: u64 := src.u64(8)
+    tmp.u64(0) := a
+    tmp.u64(8) := b
+    let v: u32x4 := tmp.u32x4(0)
+    out.u32x4(0) := v
+}
+"""
+        import advice.estimate as est
+        for arch in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory(prefix="ode_stlf_") as td:
+                src_p = Path(td) / "stlf.ode"
+                src_p.write_text(src_stlf, encoding="utf-8")
+                out_o = str(Path(td) / "stlf.o")
+                out_p = str(Path(td) / "stlf.proof")
+                res = ode_audit.pack_verified(
+                    str(src_p), None, out_o, out_p,
+                    fn_name="f_stlf", target=arch, c_abi=True, stores=STD_STORES,
+                )
+                self.assertEqual(res["verdict"], "shown", f"stlf ({arch}): {res}")
+                sym = res["symbol"]
+                _, rows = est.decode_object(out_o, sym, arch)
+                srep = est.static_analyze(rows, arch)
+                kinds = [ht["kind"] for ht in srep.get("hints") or []]
+                self.assertIn("stlf-width", kinds, f"expected stlf-width hint on {arch}, got {srep.get('hints')}")
 
 
 if __name__ == "__main__":

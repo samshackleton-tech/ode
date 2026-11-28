@@ -1262,7 +1262,7 @@ fn stack_u64_and_join(x: u64, y: u64) -> u64
                                                   fn_name="stack_u64_and_join", target=arch)
                     self.assertEqual(res["verdict"], "shown", f"stack_u64_and_join on {arch}: {res}")
 
-            # 2b. `buf.u32(off) := ...` gives crisp immediate compile-time error (no broken `str w12, [sp, 0]`)
+            # 2b. `buf.u32(off) := ...` succeeds on `arm64` (`str32_sp`) and gives crisp compile-time error on `x86_64`
             src_bad_u32 = """\
 fn bad_u32(x: u64) -> u64
     requires x <= 10
@@ -1275,10 +1275,10 @@ fn bad_u32(x: u64) -> u64
 }
 """
             p_bad = ode_unified.parse_unified(src_bad_u32, src="bad.ode")
-            for arch in ("x86_64", "arm64"):
-                err_s = p_bad["fns"][0]["impls"][arch].get("hl_err", "")
-                self.assertIn("32-bit scalar store", err_s)
-                self.assertIn(".u32x4(off)", err_s)
+            err_x = p_bad["fns"][0]["impls"]["x86_64"].get("hl_err", "")
+            self.assertIn("32-bit scalar store", err_x)
+            self.assertIn(".u32x4(off)", err_x)
+            self.assertEqual(p_bad["fns"][0]["impls"]["arm64"].get("hl_err", ""), "")
         finally:
             for k, v in old_env.items():
                 if v is None:

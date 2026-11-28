@@ -123,6 +123,7 @@ def Known.wf (n t : Nat) : Known → Prop
   | .use _ keys h => (∀ k ∈ keys, k.wf n t) ∧ h < n
   | .record u _ ids => u < n ∧ ∀ i ∈ ids, i < t
   | .word32 _ hi => hi ≤ n
+  | .termVal v id => v < n ∧ id < t
 
 /-- The table of words is in order: a term stands after the terms it is made of; the rows of its terms
 speak of unknowns in use; each known vector register has four or sixteen lanes in the table. -/
@@ -331,6 +332,7 @@ def Known.holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Kn
   | .record u fields ids => ctx.contract.preVals ctx.defs s0 → ∃ fvs, Val.decode (ρ u).toNat = .record fvs ∧
       RecFieldsHolds fields (ids.map fun i => den (inpOf ctx s0) ρ T i) fvs
   | .word32 lo hi => ∀ v, lo ≤ v → v < hi → 0 ≤ ρ v ∧ ρ v < W32i
+  | .termVal v id => ρ v = (den (inpOf ctx s0) ρ T id : Int)
 
 /-- The bytes of a run given, as memory held them at entry. -/
 def runBytes (s0 : State) (base len : Nat) : List Nat := (List.range (s0.reg len)).map fun k => s0.mem (s0.reg base + k)
@@ -590,6 +592,10 @@ theorem Known.holds_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' :
     intro v hv1 hv2
     rw [← a v (Nat.lt_of_lt_of_le hv2 wk)]
     exact h v hv1 hv2
+  | termVal v id =>
+    simp only [Known.holds] at h ⊢
+    rw [← a v wk.1, den_mono hw ha a e wk.2]
+    exact h
 
 theorem Key.wf_mono {n n' t t' : Nat} {k : Key} (hn : n ≤ n') (ht : t ≤ t') (wk : k.wf n t) : k.wf n' t' := by
   cases k with
@@ -611,6 +617,7 @@ theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ 
   | use f keys h => exact ⟨fun k hk => Key.wf_mono hn ht (wk.1 k hk), Nat.lt_of_lt_of_le wk.2 hn⟩
   | record u fields ids => exact ⟨Nat.lt_of_lt_of_le wk.1 hn, fun i hi => Nat.lt_of_lt_of_le (wk.2 i hi) ht⟩
   | word32 _ _ => exact Nat.le_trans wk hn
+  | termVal _ _ => exact ⟨Nat.lt_of_lt_of_le wk.1 hn, Nat.lt_of_lt_of_le wk.2 ht⟩
 
 /-- What holds, holds whatever values the unknowns not yet in use are given. -/
 theorem RangeHolds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {rg : RangeF} {mem : Nat → Byte} {n : Nat}

@@ -123,7 +123,7 @@ SOURCES = [
     ("the two stores exchanged", STORES, "  vmovdqu xmmword ptr [rdi], xmm1\n  vmovdqu xmmword ptr [rdi+0x10], xmm0\n" + END, HOLD),
     ("a store four bytes on, past the run's end", STORES, STORES.replace("[rdi+0x10]", "[rdi+0x14]"), WORDS),
     ("a store into the block, which is only to be read", STORES, STORES.replace(END, "  vmovdqu xmmword ptr [rsi], xmm1\n" + END), NO_RUN),
-    ("what was stored is read again", STORES, STORES.replace("  vmovdqu xmmword ptr [rdi+0x10], xmm1\n", "  vmovdqu xmm0, xmmword ptr [rdi]\n  vmovdqu xmmword ptr [rdi+0x10], xmm1\n"), AGAIN),
+    ("a part not yet written is read after a partial store", STORES, STORES.replace("  vmovdqu xmmword ptr [rdi+0x10], xmm1\n", "  vmovdqu xmm0, xmmword ptr [rdi+0x10]\n  vmovdqu xmmword ptr [rdi+0x10], xmm1\n"), AGAIN),
     ("the block read sixteen bytes on, past its end", "  vmovups xmm9, xmmword ptr [rsi+0x30]\n  vshufps xmm6, xmm8, xmm9, 136", "  vmovups xmm9, xmmword ptr [rsi+0x40]\n  vshufps xmm6, xmm8, xmm9, 136", WORDS),
     ("the block read two bytes on", "  vmovups xmm8, xmmword ptr [rsi]\n  vmovups xmm9, xmmword ptr [rsi+0x10]\n", "  vmovups xmm8, xmmword ptr [rsi+2]\n  vmovups xmm9, xmmword ptr [rsi+0x10]\n", WORDS),
 ]
@@ -148,7 +148,7 @@ SOURCES_SSE41 = [
     ("the last four words are not stored", STORES_SSE41, "  movups xmmword ptr [rdi], xmm0\n" + END_SSE41, HOLD),
     ("the two stores exchanged", STORES_SSE41, "  movups xmmword ptr [rdi], xmm1\n  movups xmmword ptr [rdi+0x10], xmm0\n" + END_SSE41, HOLD),
     ("a store into the block, which is only to be read", STORES_SSE41, STORES_SSE41.replace(END_SSE41, "  movups xmmword ptr [rsi], xmm1\n" + END_SSE41), NO_RUN),
-    ("what was stored is read again", STORES_SSE41, STORES_SSE41.replace("  movups xmmword ptr [rdi+0x10], xmm1\n", "  movups xmm0, xmmword ptr [rdi]\n  movups xmmword ptr [rdi+0x10], xmm1\n"), AGAIN),
+    ("a part not yet written is read after a partial store", STORES_SSE41, STORES_SSE41.replace("  movups xmmword ptr [rdi+0x10], xmm1\n", "  movups xmm0, xmmword ptr [rdi+0x10]\n  movups xmmword ptr [rdi+0x10], xmm1\n"), AGAIN),
     ("the block read sixteen bytes on, past its end", "  movups xmm7, xmmword ptr [rsi+0x30]\n", "  movups xmm7, xmmword ptr [rsi+0x40]\n", WORDS),
 ]
 

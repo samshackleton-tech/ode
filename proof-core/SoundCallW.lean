@@ -3693,8 +3693,8 @@ theorem symStore8_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         have CT := touch_carried E H wf w
         have sxT := EV.sem_agree sx CT.agree CT.mono
         have eh := ev_high ρ xr
-        have S1 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ) CT.wf.words.ok sxT.2.2
-        have S2 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ) S1.ok (bounded_high sxT.2.2)
+        have S1 := wAtomK_step_of CT.holds CT.wf (Ext.refl _) CT.wf.words.ok sxT.2.2
+        have S2 := wAtomK_step_of CT.holds CT.wf S1.ext S1.ok (bounded_high sxT.2.2)
         have C5 := Carried.terms CT.holds CT.wf (S1.ext.trans S2.ext) S2.ok
         have hnw' : ((s.touch ctx w).wrote.any fun e => e.1 == w) = false := by
           rw [touch_wrote, List.any_eq_false]
@@ -3707,7 +3707,8 @@ theorem symStore8_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         have d2 := S2.den
         have d1' := den_ext (inp := inpOf ctx s0) (ρ := ρ) S1.ok.wf S2.ext S1.lt
         have Hs := C5.holds.storeRunWords E hw (c := c.toNat)
-          (l := [(wAtom xr (s.touch ctx w).tab).1, (wAtom (Lin.high xr) (wAtom xr (s.touch ctx w).tab).2).1])
+          (l := [(wAtomK (s.touch ctx w).known xr (s.touch ctx w).tab).1,
+                 (wAtomK (s.touch ctx w).known (Lin.high xr) (wAtomK (s.touch ctx w).known xr (s.touch ctx w).tab).2).1])
           (lanes := [x % 4294967296, x / 4294967296]) rfl (by omega)
           (by simp only [List.length_cons, List.length_nil]; omega) hnw'
           (fun k hk => by
@@ -3752,8 +3753,8 @@ theorem symStore8_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         have x0 : 0 ≤ ev ρ xr := by rw [← sxT.2.1]; exact Int.natCast_nonneg _
         obtain ⟨ρ', CD, eq, _, bq, _⟩ := symDivide_sound CT.holds CT.wf sxT.2.2 (show (0 : Int) < W32i by decide) x0
         have sxD := EV.sem_agree sxT CD.agree CD.mono
-        have S1 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ') CD.wf.words.ok sxD.2.2
-        have S2 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ') S1.ok bq
+        have S1 := wAtomK_step_of CD.holds CD.wf (Ext.refl _) CD.wf.words.ok sxD.2.2
+        have S2 := wAtomK_step_of CD.holds CD.wf S1.ext S1.ok bq
         have C5 := Carried.terms CD.holds CD.wf (S1.ext.trans S2.ext) S2.ok
         have hnw' : ((symDivide (s.touch ctx w) xr W32i).2.2.wrote.any fun e => e.1 == w) = false := by
           rw [symDivide_wrote, touch_wrote, List.any_eq_false]
@@ -3767,8 +3768,9 @@ theorem symStore8_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         have d2 := S2.den
         have d1' := den_ext (inp := inpOf ctx s0) (ρ := ρ') S1.ok.wf S2.ext S1.lt
         have Hs := C5.holds.storeRunWords E hw (c := c.toNat)
-          (l := [(wAtom xr (symDivide (s.touch ctx w) xr W32i).2.2.tab).1,
-                 (wAtom (symDivide (s.touch ctx w) xr W32i).1 (wAtom xr (symDivide (s.touch ctx w) xr W32i).2.2.tab).2).1])
+          (l := [(wAtomK (symDivide (s.touch ctx w) xr W32i).2.2.known xr (symDivide (s.touch ctx w) xr W32i).2.2.tab).1,
+                 (wAtomK (symDivide (s.touch ctx w) xr W32i).2.2.known (symDivide (s.touch ctx w) xr W32i).1
+                   (wAtomK (symDivide (s.touch ctx w) xr W32i).2.2.known xr (symDivide (s.touch ctx w) xr W32i).2.2.tab).2).1])
           (lanes := [x % 4294967296, x / 4294967296]) rfl (by omega)
           (by simp only [List.length_cons, List.length_nil]; omega) hnw'
           (fun k hk => by
@@ -3802,6 +3804,43 @@ theorem symStore8_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
                · exact wf5.words.wrote w' j i (List.mem_filter.mp m).1,
              fun _ _ hs => nomatch hs⟩, wf5.known, fun _ h => nomatch h⟩
     next => exact (refuse_ok h).elim
+
+theorem store4_words (mem : Nat → Byte) (a x : Nat) : storeWords mem a [x % W32] = store mem a x 4 := by
+  have h0 : x % W32 % 256 = x % 256 := by unfold W32; omega
+  have h1 : x % W32 / 256 % 256 = x / 256 % 256 := by unfold W32; omega
+  have h2 : x % W32 / 256 / 256 % 256 = x / 256 / 256 % 256 := by unfold W32; omega
+  have h3 : x % W32 / 256 / 256 / 256 % 256 = x / 256 / 256 / 256 % 256 := by unfold W32; omega
+  funext y
+  simp only [storeWords, store, h0, h1, h2, h3]
+
+/-- **Four bytes of a number stored into either a run given to write or the stack frame**:
+delegates directly to `symStoreWords_sound` at width 1. -/
+theorem symStore4_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) : Store4Ok E := by
+  intro s s' addr xr items rest ρ st a x h H wf hlt ha sx
+  unfold symStore4 at h
+  let t0 := (match findOut addr ctx.contract.outs 0 with | some (.out w _) => s.touch ctx w | _ => s)
+  have C0 : Carried ctx s0 ρ s ρ t0 st := by
+    show Carried ctx s0 ρ s ρ (match findOut addr ctx.contract.outs 0 with | some (.out w _) => s.touch ctx w | _ => s) st
+    cases findOut addr ctx.contract.outs 0 with
+    | none => exact Carried.here H wf
+    | some loc =>
+      cases loc with
+      | out w _ => exact touch_carried E H wf w
+      | frame _ | region _ _ | data _ => exact Carried.here H wf
+  have sx0 := EV.sem_agree sx C0.agree C0.mono
+  have S1 := wAtomK_step_of C0.holds C0.wf (Ext.refl _) C0.wf.words.ok sx0.2.2
+  have C1 := Carried.terms C0.holds C0.wf S1.ext S1.ok
+  have hloc : ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → a = A := by
+    intro A eA ltA; unfold M64 at hlt ltA; omega
+  obtain ⟨al, C2⟩ := symStoreWords_sound E C1.holds C1.wf (by decide) h hloc (lanes := [x % W32]) rfl
+    (fun i mi => by simp at mi; subst mi; exact S1.lt)
+    (fun k hk => by
+      have hk0 : k = 0 := by omega
+      subst hk0
+      change x % W32 = den (inpOf ctx s0) ρ (wAtomK t0.known xr t0.tab).2.list (wAtomK t0.known xr t0.tab).1
+      rw [S1.den, ← sx0.2.1]; unfold W32 W32i; omega)
+  rw [store4_words] at C2
+  exact ⟨al, ρ, C0.then (C1.then C2)⟩
 
 /-- **A call, by contract, of a function that writes a run of words for its caller**, the run of this
 function it is given a part of being first taken as written with the words it held at entry. -/

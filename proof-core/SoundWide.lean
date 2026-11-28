@@ -58,17 +58,17 @@ theorem symSpreadScalar16_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Sett
       WideValue ctx s0 ρ' s' l (List.replicate 16 (x % W32)) := by
   unfold symSpreadScalar16 at h
   obtain ⟨⟨v, s1⟩, r1, h1, h⟩ := V.bind_ok h
-  obtain ⟨ρ1, x, c, hx, sem⟩ := symValue_sound E bind a h1 H wf
+  obtain ⟨ρ1, x, c, hx, sem⟩ := symValue_sound E (symLoadWordScalar_sound E) bind a h1 H wf
   cases v with
   | lin r =>
     obtain ⟨rfl, rfl⟩ := pure_pair h
-    obtain ⟨c', val⟩ := wideReplicate c.holds c.wf sem.2.2
+    have hs := wAtomK_step_of c.holds c.wf (Ext.refl _) c.wf.words.ok sem.2.2
     have eq : (ev ρ1 r % W32i).toNat = x % W32 := by
       rw [← sem.2.1]
       change ((x : Int) % (W32 : Int)).toNat = x % W32
       rw [← Int.natCast_emod]
       rfl
-    exact ⟨ρ1, x, c.then c', hx, eq ▸ val⟩
+    exact ⟨ρ1, x, c.then (Carried.terms c.holds c.wf hs.ext hs.ok), hx, eq ▸ (by simp [WideValue, hs.lt, hs.den])⟩
   | equal _ _ => exact (refuse_ok h).elim
   | below _ _ => exact (refuse_ok h).elim
 
@@ -406,7 +406,7 @@ theorem findLane_spec {c : Contract} {addr : Row} : ∀ {l : List Known} {v j p 
         next =>
           obtain ⟨m, t⟩ := findLane_spec h
           exact ⟨List.mem_cons_of_mem _ m, t⟩
-    | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ =>
+    | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ | termVal _ _ =>
       simp only [findLane] at h
       obtain ⟨m, t⟩ := findLane_spec h
       exact ⟨List.mem_cons_of_mem _ m, t⟩

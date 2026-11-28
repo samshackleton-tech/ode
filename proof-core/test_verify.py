@@ -393,8 +393,15 @@ contract wide_add(out: block, a: block, b: block) {
     def test_wide_load_does_not_read_the_entry_value_after_a_store(self):
         buffers = ("arg out inout 64", "arg a fixed 64")
         self.assertEqual(self.wide([".zload false 1 .rdi 0"], buffers), "shown\n")
+        # Storing `a` into `out` and reading `out` back reads the written words (not the entry value):
+        ops_rw = [".zload false 0 .rsi 0", ".zstore false .rdi 0 0", ".zload false 1 .rdi 0", ".zstore false .rdi 0 1"]
+        self.assertEqual(self.wide(ops_rw, (*buffers, "ensuresw out (call bytes_of (call words (name a)))")), "shown\n")
+        self.assertTrue(self.wide(ops_rw, (*buffers, "ensuresw out (call bytes_of (call words (name out)))")).startswith("refused:"))
+        # Reading a part not yet written after a partial store is refused:
+        ops_partial = [".zload false 0 .rsi 0", ".zstore false .rdi 0 0", ".zload false 1 .rdi 64"]
+        self.assertIn("a read of a run given to read and write after it was written to",
+                      self.wide(ops_partial, ("arg out inout 128", buffers[1])))
         ops = [".zload false 0 .rsi 0", ".zstore false .rdi 0 0", ".zload false 1 .rdi 0"]
-        self.assertIn("a read of a run given to read and write after it was written to", self.wide(ops, buffers))
         self.assertIn("sixty-four bytes of a run given only to write", self.wide(ops, ("arg out out 64", buffers[1])))
 
     def test_a_proof_cannot_add_to_what_is_to_be_shown(self):

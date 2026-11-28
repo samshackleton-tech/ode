@@ -4462,11 +4462,11 @@ class HLLower:
                             d_str = f" + {disp}" if disp else ""
                             self.emit(st.line, f"vmovdqu32 [{base}{d_str}], {vr}")
                 return
-            if st.width == "u32":
+            if st.width == "u32" and self.arch == "x86_64":
                 raise HLErr(
-                    f"{self.src}: line {st.line}: 32-bit scalar store `{st.buf}.u32(...) := ...` is not supported yet; "
+                    f"{self.src}: line {st.line}: 32-bit scalar store `{st.buf}.u32(...) := ...` is not yet in `core/x86.tab`; "
                     f"use `.u32x4(off) := ...`, `.u64(off) := ...` "
-                    f"on a stack `buf`, or byte stores `out[i] := ...` on an output buffer"
+                    f"(packing two 32-bit words as `lo | (hi << 32)`), or byte stores `out[i] := ...`"
                 )
             if st.width == "u8" and self.var_loc.get(st.buf, (None,))[0] == "buf":
                 raise HLErr(

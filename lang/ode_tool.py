@@ -438,20 +438,19 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
         return "hint: the prover could not match symbolic register/memory values to the specification formula here; check the loop `place { ... }` invariant, guard bounds, or split multi-way dispatch into small `calling` helper functions"
     if "is not one expression" in reason and "wrote" in reason:
         return "hint: `wrote` syntax is `wrote out[.. i] = expr` (forward) or `wrote out[i ..] = expr` (countdown), naming the full output value"
-    if "a read of a run given only to write" in reason:
+    if "a read of a run given only to write" in reason or "bytes of a run given only to write" in reason:
         return (
-            "hint: for an in-out word buffer (e.g. `h: 32 bytes` used with `words(h)`), load and store "
-            "128-bit lanes with `h.u32x4(0)` / `h.u32x4(16)` rather than scalar `h.u32(...)`"
+            "hint: a pure write-only output buffer (`out`) cannot be read (preserving exclusive streaming / no-RFO safety); "
+            "keep intermediate values in registers or stack `buf`s, or mark the buffer in-out if the contract specifies reading it"
         )
-    if "a read of a run of a fixed count that is not eight bytes within it" in reason:
+    if "a read of a run of a fixed count that is not" in reason:
         return (
-            "hint: fixed-size input buffers support 16-byte vector loads (`buf.u32x4(off)`) and "
-            "8-byte scalar loads (`buf.u64(off)`), not 4-byte scalar `buf.u32(off)`"
+            "hint: fixed-size input word buffers support 4-byte (`buf.u32(off)`), 8-byte (`buf.u64(off)`), "
+            "and 16/64-byte vector (`buf.u32x4(off)` / `buf.u32x16(off)`) loads at 4-byte-aligned constant offsets within bounds"
         )
-    if "a read of the frame where nothing was written" in reason:
+    if "a read of the frame where nothing was written" in reason or "bytes of the frame that are not known words" in reason:
         return (
-            "hint: scalar stack loads (`buf.u64(off)`) only read slots written by scalar stores "
-            "(not vector `buf.u32x4(off) := ...` spills); keep vector data in `u32x4` registers / `stack var v: u32x4`"
+            "hint: stack slots must be written before reading (with matching offset within bounds of the frame)"
         )
     if "the frame does not hold what it held on first coming there" in reason:
         return (

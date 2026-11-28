@@ -245,11 +245,11 @@ def _insn_load_bytes(it):
         return 16
     if r.startswith("vmov") and "_rm" in r:
         return 64 if "zmm" in t else (32 if "ymm" in t else 16)
-    if r in ("movdqu_rm", "movdqa_rm", "ldr_q", "ldr_q_sp"):
+    if r in ("movdqu_rm", "movdqa_rm", "ldr_q", "ldr_q_sp", "ldr128", "ldr128_sp", "ld1_4s"):
         return 16
-    if r in ("mov64_rm", "mov_rm", "ldr_x", "ldr_sp", "ldr", "pop") or (r.startswith("ldr") and ("x" in t or "sp" in t) and "q" not in r and "b" not in r and "h" not in r and "w" not in r):
+    if r in ("mov64_rm", "mov_rm", "ldr64", "ldr64_sp", "ldr_x", "ldr_sp", "ldr", "pop") or (r.startswith("ldr") and ("x" in t or "sp" in t) and "q" not in r and "128" not in r and "32" not in r and "b" not in r and "h" not in r and "w" not in r):
         return 8
-    if r in ("mov32_rm", "ldr_w", "ldr_w_sp"):
+    if r in ("mov32_rm", "ldr32", "ldr32_sp", "ldr_w", "ldr_w_sp"):
         return 4
     if r in ("movzx16_rm", "ldrh"):
         return 2
@@ -263,6 +263,33 @@ def _insn_load_bytes(it):
         return 8
     if it["class"] in ("load", "vec_load"):
         return 16 if it["class"] == "vec_load" else 8
+    return 0
+
+
+def _insn_store_bytes(it):
+    """Exact byte width written by a single decoded memory-store instruction, or 0."""
+    r = it["row"]
+    t = it["text"]
+    if r == "stp" or r == "stp_sp":
+        return 16
+    if r.startswith("vmov") and "_mr" in r:
+        return 64 if "zmm" in t else (32 if "ymm" in t else 16)
+    if r in ("movdqu_mr", "movdqa_mr", "str_q", "str_q_sp", "str128", "str128_sp", "st1_4s"):
+        return 16
+    if r in ("mov64_mr", "mov_mr", "str64", "str64_sp", "str_x", "str_sp", "push"):
+        return 8
+    if r in ("mov32_mr", "str32", "str32_sp", "str_w", "str_w_sp"):
+        return 4
+    if r in ("mov8_mr", "strb"):
+        return 1
+    if "byte ptr" in t and t.startswith("mov byte ptr"):
+        return 1
+    if "dword ptr" in t and t.startswith("mov dword ptr"):
+        return 4
+    if "qword ptr" in t and t.startswith("mov qword ptr"):
+        return 8
+    if it["class"] in ("store", "vec_store", "wide_store"):
+        return 64 if it["class"] == "wide_store" else (16 if it["class"] == "vec_store" else 8)
     return 0
 
 
@@ -332,6 +359,57 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
                 f"(x86-64 System V entry pushes an 8B return address). 1-in-4 stack slots will split "
                 f"a 64B cache line, triggering ~16-20 cyc split-line STLF replay stalls on Zen 4/5 "
                 f"(measured up to 1.8x slower). Align rsp to 16B before vector spills{fix_ex}."
+            ),
+        })
+    # Static store-to-load forwarding width hazard detection on stack slots:
+    # writing narrower slots (e.g. 4B/8B) and reading an overlapping wider slot (8B/16B/64B)
+    # triggers a ~12-20 cyc STLF replay stall on both x86-64 and Apple Silicon.
+    sp_reg = "sp" if target == "arm64" else "rsp"
+    last_frame_store = {}  # byte_off -> (store_start, store_size)
+    stlf_width_hits = []
+    for it in parsed:
+        if sp_reg in it["writes"] and not it["ret"]:
+            last_frame_store.clear()
+            continue
+        if it["class"] in ("store", "vec_store", "wide_store"):
+            for op in it["writes"]:
+                if op.startswith("frame:"):
+                    parts = op.split(":")
+                    try:
+                        off = int(parts[1])
+                        ssz = int(parts[2]) if len(parts) >= 3 else _insn_store_bytes(it)
+                    except (ValueError, IndexError):
+                        continue
+                    if ssz > 0:
+                        for b in range(off, off + ssz):
+                            last_frame_store[b] = (off, ssz)
+        elif it["class"] in ("load", "vec_load", "wide_load"):
+            for op in it["reads"]:
+                if op.startswith("frame:"):
+                    parts = op.split(":")
+                    try:
+                        off = int(parts[1])
+                        lsz = int(parts[2]) if len(parts) >= 3 else _insn_load_bytes(it)
+                    except (ValueError, IndexError):
+                        continue
+                    if lsz > 0:
+                        narrower = {
+                            last_frame_store[b]
+                            for b in range(off, off + lsz)
+                            if b in last_frame_store and last_frame_store[b][1] < lsz
+                        }
+                        if narrower:
+                            stlf_width_hits.append((it["pc"], off, lsz, sorted(narrower)[0]))
+    if stlf_width_hits:
+        pc0, loff0, lsz0, (soff0, ssz0) = stlf_width_hits[0]
+        whole_hints.append({
+            "kind": "stlf-width",
+            "count": len(stlf_width_hits),
+            "message": (
+                f"{len(stlf_width_hits)} stack load(s) read a wider slot than an overlapping earlier store "
+                f"(first at +0x{pc0:x}: {ssz0}B store at [sp+{soff0}] -> {lsz0}B load at [sp+{loff0}]). "
+                f"Narrow-store to wide-load forwarding misses trigger ~12-20 cyc STLF stalls; "
+                f"pack in registers (e.g. `vec.pack_u64x2`) or keep store/load widths aligned."
             ),
         })
 
