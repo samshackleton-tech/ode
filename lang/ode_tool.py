@@ -205,6 +205,17 @@ def _matching_spec_comparisons(spec_text, raw_goals, contract=None):
             consts.add(abs(row[0]))
     if not consts:
         return []
+    # Resolve `const NAME = INT` declarations in `spec_text` so comparisons like `op == OP_EXIT`
+    # match goal constant `149` even when the spec uses symbolic constants.
+    val_to_consts = {}
+    for raw_line in spec_text.splitlines():
+        s = raw_line.split("//")[0].strip()
+        cm = re.match(r"^const\s+([A-Za-z_]\w*)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\b", s)
+        if cm:
+            try:
+                val_to_consts.setdefault(int(cm.group(2), 0), []).append(cm.group(1))
+            except ValueError:
+                pass
     matches = []
     cur_def = None
     for raw_line in spec_text.splitlines():
@@ -221,8 +232,15 @@ def _matching_spec_comparisons(spec_text, raw_goals, contract=None):
         if reachable is not None and cur_def not in reachable:
             continue
         for k in sorted(consts):
-            if re.search(rf"(?:==|!=|<=|>=|<|>)\s*{k}\b|\b{k}\s*(?:==|!=|<=|>=|<|>)", s):
-                entry = f"def {cur_def}: {s}"
+            tokens = [str(k)] + val_to_consts.get(k, [])
+            hit_tok = None
+            for tok in tokens:
+                if re.search(rf"(?:==|!=|<=|>=|<|>)\s*{re.escape(tok)}\b|\b{re.escape(tok)}\s*(?:==|!=|<=|>=|<|>)", s):
+                    hit_tok = tok
+                    break
+            if hit_tok is not None:
+                note = f"  ({hit_tok} = {k})" if hit_tok != str(k) else ""
+                entry = f"def {cur_def}: {s}{note}"
                 if entry not in matches:
                     matches.append(entry)
                 if len(matches) >= 3:

@@ -1532,7 +1532,7 @@ def _rewrite_inline_returns(stmts, dst_var, inl_name, call_line, src):
     return out
 
 
-def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None, const_env=None):
+def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None, const_env=None, multi_split_seen=None):
     """Hygienically expand High-Level `inline fn` calls (statements, `let`/`var`, assignments,
     `return`, and nested expressions) in exact statement order, evaluating `const` params,
     emitting strict `CheckStmt` for `requires`, and auto-`JoinStmt` for contracted branching scalars."""
@@ -1542,6 +1542,8 @@ def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None, const_env=None
         seq = [0]
     if const_env is None:
         const_env = {}
+    if multi_split_seen is None:
+        multi_split_seen = {}
     if depth > 16:
         raise HLErr(f"{src}: `inline fn` expansion exceeded max depth 16 (recursive inline fn?)")
 
@@ -1630,7 +1632,7 @@ def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None, const_env=None
 
         body = _subst_inline_stmts(inl.stmts, vmap, emap, pfx, call_line)
         body = expand_unrolls(body, src)
-        body = _expand_hl_inlines(body, hl_inlines, src, depth + 1, seq, cenv)
+        body = _expand_hl_inlines(body, hl_inlines, src, depth + 1, seq, cenv, multi_split_seen)
 
         if dst_info is None:
             return pre_stmts + body
@@ -1642,10 +1644,20 @@ def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None, const_env=None
             and body[-1].expr is not None
             and not _stmts_has_return(body[:-1])
         )
+        n_splits = _count_splits_stmts(body)
+        if inl.returns is None and inl.ret_ty in ("u64", "u32", "u8") and n_splits >= 2:
+            multi_split_seen[inl.name] = multi_split_seen.get(inl.name, 0) + 1
+            if multi_split_seen[inl.name] >= 2:
+                raise HLErr(
+                    f"{src}: line {call_line}: inline fn `{inl.name}` has {n_splits} branch/select splits and is called "
+                    f"multiple times without a `returns <spec_expr>` clause (which multiplies symbolic paths exponentially); "
+                    f"add `returns <spec_expr>` on `inline fn {inl.name}` (triggering automatic `join` path-merging) "
+                    f"or make `{inl.name}` a regular `fn`"
+                )
         needs_auto_join = (
             inl.returns is not None
             and inl.ret_ty in ("u64", "u32", "u8")
-            and _count_splits_stmts(body) >= 2
+            and n_splits >= 2
         )
         post_join = []
         if dst_info[0] == "return":
@@ -1797,8 +1809,8 @@ def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None, const_env=None
             out.extend(cp)
             out.append(IfStmt(
                 c,
-                _expand_hl_inlines(st.then_body, hl_inlines, src, depth, seq, cur_cenv),
-                _expand_hl_inlines(st.else_body, hl_inlines, src, depth, seq, cur_cenv),
+                _expand_hl_inlines(st.then_body, hl_inlines, src, depth, seq, cur_cenv, multi_split_seen),
+                _expand_hl_inlines(st.else_body, hl_inlines, src, depth, seq, cur_cenv, multi_split_seen),
                 st.line,
             ))
         elif isinstance(st, WhileStmt):
@@ -1809,7 +1821,7 @@ def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None, const_env=None
                 )
             out.append(WhileStmt(
                 st.cond, st.maintains, st.writes, st.decreases,
-                _expand_hl_inlines(st.body, hl_inlines, src, depth, seq, cur_cenv),
+                _expand_hl_inlines(st.body, hl_inlines, src, depth, seq, cur_cenv, multi_split_seen),
                 st.line,
             ))
         elif isinstance(st, ForStmt):
@@ -1819,11 +1831,11 @@ def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None, const_env=None
             out.extend(hp)
             out.append(ForStmt(
                 st.var, lo, hi, st.step, st.unroll, st.maintains, st.writes, st.decreases,
-                _expand_hl_inlines(st.body, hl_inlines, src, depth, seq, cur_cenv),
+                _expand_hl_inlines(st.body, hl_inlines, src, depth, seq, cur_cenv, multi_split_seen),
                 st.line,
             ))
         elif isinstance(st, BlockStmt):
-            out.append(BlockStmt(_expand_hl_inlines(st.body, hl_inlines, src, depth, seq, cur_cenv), st.line))
+            out.append(BlockStmt(_expand_hl_inlines(st.body, hl_inlines, src, depth, seq, cur_cenv, multi_split_seen), st.line))
         else:
             out.append(st)
     return out
@@ -3551,14 +3563,19 @@ class HLLower:
                             mn = "and" if e.op == "&" else "or"
                             if isinstance(rhs_e, Num):
                                 k = rhs_e.val
-                                if lreg != dst:
-                                    self.emit(e.line, f"mov {dst}, {lreg}")
-                                if -(1 << 31) <= k < (1 << 31):
-                                    self.emit(e.line, f"{mn} {dst}, {k}")
+                                if e.op == "&" and k == 0xFFFFFFFF:
+                                    # 1-instruction 32-bit zero-extending move (`D = low32(S)` in core/x86.tab),
+                                    # proved directly by Core.lean & verify2.py with zero temp register!
+                                    self.emit(e.line, f"mov {X86_REG32[dst]}, {X86_REG32[lreg]}")
                                 else:
-                                    with self._temp_reg(e.line, avoid=(dst,), why=f"immediate `{k}` for `{e.op}`") as tr2:
-                                        self._emit_imm(e.line, tr2, k)
-                                        self.emit(e.line, f"{mn} {dst}, {tr2}")
+                                    if lreg != dst:
+                                        self.emit(e.line, f"mov {dst}, {lreg}")
+                                    if -(1 << 31) <= k < (1 << 31):
+                                        self.emit(e.line, f"{mn} {dst}, {k}")
+                                    else:
+                                        with self._temp_reg(e.line, avoid=(dst,), why=f"immediate `{k}` for `{e.op}`") as tr2:
+                                            self._emit_imm(e.line, tr2, k)
+                                            self.emit(e.line, f"{mn} {dst}, {tr2}")
                             else:
                                 avoid_r = (dst,) if lreg != dst else ()
                                 with self._hold_expr(rhs_e, avoid=avoid_r, why=f"right side `{_expr_brief(rhs_e)}` of `{e.op}`") as rreg:

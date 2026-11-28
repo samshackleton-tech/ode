@@ -1008,13 +1008,14 @@ def _rewrite_decl_tokens(text, decl_start, decl_end, sub_toks, top_map, fn_renam
     return "".join(out)
 
 
-def build_helper_spec(full_spec_text, exported_cname, helper_rename_map, canon):
+def build_helper_spec(full_spec_text, exported_cname, helper_rename_map, canon, extra_place_texts=()):
     """Build the helper specification block stored in `.proof` alongside canonical `.ode.ocl`.
 
     - Drops the exported function's own contract, `kind` hints (unused by Lean `statement.py`),
       and all top-level definitions/constants/layouts/sequences/machines already in `canon["canonical"]`.
     - Keeps every helper contract in `helper_rename_map` (renamed to its local `.o` symbol, preserving
-      its `calling { ... }` block) plus helper-only definitions, layouts, and lemmas.
+      its `calling { ... }` block) plus helper-only definitions, layouts, and lemmas reachable from
+      helper contracts or from `extra_place_texts` (loop/join `place` facts).
     - Rewrites references to canonicalized names (`orig -> C0/f0/s0/M0/L0`) and record fields (`r0..`),
       and renames any helper-only declaration that would collide with an identifier in `canon["canonical"]`.
     """
@@ -1061,6 +1062,13 @@ def build_helper_spec(full_spec_text, exported_cname, helper_rename_map, canon):
                 if k == "name" and v in decl_by_name and v not in reachable_helpers:
                     reachable_helpers.add(v)
                     work.append(v)
+    for pl_txt in (extra_place_texts or ()):
+        if not pl_txt:
+            continue
+        for tok in re.findall(r"\b[A-Za-z_][A-Za-z_0-9]*\b", pl_txt):
+            if tok in decl_by_name and tok not in reachable_helpers:
+                reachable_helpers.add(tok)
+                work.append(tok)
     while work:
         cur_nm = work.pop()
         _, _, _, _, sub = decl_by_name[cur_nm]

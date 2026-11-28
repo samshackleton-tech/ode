@@ -806,11 +806,23 @@ def audit_binary(
             combined_spec = bound_spec + "\n" + helper_spec
         else:
             if p_order is not None:
-                if p_order != [exp_sym] or helper_spec.strip():
+                if p_order != [exp_sym]:
                     errors.append(f"single-function binary cannot carry extra helper proof entries: {p_order}")
                     return res
             order = [exp_sym]
-            combined_spec = bound_spec
+            if helper_spec.strip():
+                try:
+                    checked_sp = ode.with_proof(bound_spec, helper_spec)
+                except BaseException as exc:
+                    errors.append(f"helper specification in `.proof` refused: {exc}")
+                    return res
+                extra_contracts = set(checked_sp.contracts.keys()) - {exp_sym}
+                if extra_contracts:
+                    errors.append(f"single-function binary cannot carry helper contracts: {sorted(extra_contracts)}")
+                    return res
+                combined_spec = bound_spec + "\n" + helper_spec
+            else:
+                combined_spec = bound_spec
 
     # 8. Decode EVERY function in `order` and enforce 100% `.text` executable-byte coverage.
     sym_by_name = dict(local_funcs)
@@ -986,7 +998,7 @@ def format_audit_report(res, show_contract=False, glossary=None):
 # Hash-bound builder (`ode_tool.py pack`) & multi-object bundler
 # ---------------------------------------------------------------------------
 
-def _map_places_text(pl_text, canon_glossary, orig_sym, new_sym, is_export):
+def _map_places_text(pl_text, canon_glossary, orig_sym, new_sym, is_export, extra_top_map=None):
     """Remap specification definition (and, for export, parameter) names inside loop place hints.
 
     Avoids alpha-capture when a loop's local `name X = REG` variable has the same name as a
@@ -1001,6 +1013,10 @@ def _map_places_text(pl_text, canon_glossary, orig_sym, new_sym, is_export):
             continue
         if is_export or can[0] in ("C", "f", "s", "L"):
             inv_map[orig] = can
+    if extra_top_map:
+        for orig, can in extra_top_map.items():
+            if "." not in orig and orig not in inv_map:
+                inv_map[orig] = can
     inv_map[orig_sym] = new_sym
     if not inv_map:
         return pl_text
@@ -1238,9 +1254,12 @@ def pack_bundle(
         f.write(obj_bytes)
 
     bound_spec = ode_canon.bind_symbol(canon["canonical"], hash_sym)
-    helper_spec, top_map = ode_canon.build_helper_spec(full_spec_text, export_orig_sym, helper_rename, canon)
+    helper_spec, top_map = ode_canon.build_helper_spec(
+        full_spec_text, export_orig_sym, helper_rename, canon,
+        extra_place_texts=(places_by_sym or {}).values(),
+    )
     # Validate disjointness via `ode.with_proof` immediately.
-    if helper_rename:
+    if helper_spec.strip():
         ode.with_proof(bound_spec, helper_spec)
     combined_spec = bound_spec + ("\n" + helper_spec if helper_spec else "")
 
@@ -1263,6 +1282,7 @@ def pack_bundle(
             new_nm = rename_map[orig]
             pl = _map_places_text(
                 places_by_sym.get(orig, ""), canon["glossary"], orig, new_nm, orig == export_orig_sym,
+                extra_top_map=top_map,
             )
             prove_items.append((out_obj, new_nm, pl))
         with tempfile.TemporaryDirectory(prefix="ode_bundle_") as tmp:
@@ -1494,21 +1514,34 @@ def pack_verified(
 
     # Generate `.statement` and separate `.proof` via `proof-core/prove.py`.
     bound_spec = ode_canon.bind_symbol(canon["canonical"], hash_sym)
-    pl_text = _map_places_text(info.get("places", {}).get(orig_sym, ""), canon["glossary"], orig_sym, hash_sym, True)
+    raw_pl = info.get("places", {}).get(orig_sym, "")
+    helper_spec, top_map = ode_canon.build_helper_spec(
+        spec_text, orig_sym, {}, canon, extra_place_texts=(raw_pl,),
+    )
+    if helper_spec.strip():
+        ode.with_proof(bound_spec, helper_spec)
+    combined_spec = bound_spec + ("\n" + helper_spec if helper_spec else "")
+    pl_text = _map_places_text(raw_pl, canon["glossary"], orig_sym, hash_sym, True, extra_top_map=top_map)
     with tempfile.TemporaryDirectory(prefix="ode_pack_") as tmp:
         stmt_path = os.path.join(tmp, "pack.statement")
+        raw_proof_path = os.path.join(tmp, "pack.raw.proof") if helper_spec.strip() else out_proof
         os.makedirs(os.path.dirname(os.path.abspath(out_proof)), exist_ok=True)
         try:
-            prove.prove(bound_spec, [(out_obj, hash_sym, pl_text)], stmt_path, out_proof)
+            prove.prove(combined_spec, [(out_obj, hash_sym, pl_text)], stmt_path, raw_proof_path)
         except SystemExit as exc:
             tgt = parse_elf64(obj_bytes)["target"]
             _raise_pack_proof_error(
-                exc, stmt_path, out_proof, {hash_sym: orig_sym}, {orig_sym: info}, spec_text, tgt,
+                exc, stmt_path, raw_proof_path, {hash_sym: orig_sym}, {orig_sym: info}, spec_text, tgt,
             )
         except Exception as exc:
             if type(exc).__name__ == "Stop":
                 raise SystemExit(f"ode: decode error in `{orig_sym}`: {exc} (missing `ret` or empty body?)") from exc
             raise
+        if helper_spec.strip():
+            with open(raw_proof_path, "r", encoding="utf-8") as rf:
+                raw_pf = rf.read()
+            with open(out_proof, "w", encoding="utf-8") as pf:
+                pf.write(format_proof_bundle([hash_sym], helper_spec, raw_pf))
 
     if glossary_out:
         os.makedirs(os.path.dirname(os.path.abspath(glossary_out)), exist_ok=True)

@@ -153,7 +153,7 @@ Because `select(va != vb, 1, diff)` lowers directly to `cmp` + `cmovne` (x86-64)
 
 ## 5. Helper Functions, Recursion, and Calling Conventions
 
-Every plain `fn` in `.ode` stays free of C-ABI boilerplate. When one Ode function calls another (in the same file or across `use`-imported files, with callees defined before callers), the compiler automatically derives the callee's exact `preserves` set so caller registers stay live across the call with minimal or zero stack spills. Only the exported boundary packed with `ode pack --c-abi` follows System V AMD64 (`rdi..r9`, return `rax`) / AAPCS64 (`x0..x7`, return `x0`).
+Every plain `fn` in `.ode` stays free of C-ABI boilerplate. When one Ode function calls another (in the same file or across `use`-imported files, with callees defined before callers), the compiler automatically derives the callee's exact `preserves` set so caller registers stay live across the call with minimal or zero stack spills. Only the exported boundary packed with `ode pack --c-abi` follows System V AMD64 (`rdi..r9`, return `rax`) / AAPCS64 (`x0..x7`, return `x0`). For private non-recursive helper `fn`s, omit `stack N` — the compiler computes the exact stack frame automatically so you never understate a callee's saved-register slot by 16 bytes.
 
 **Direct self-recursion:** A recursive function declares a `decreases arg` clause (where `arg` is a parameter listed in `trace depends on`) and a linear stack budget `stack C + D * arg` (for example `stack 64 + 64 * depth` for frame size `<= 64` bytes per recursive level) or logarithmic `stack C + D * bits(arg)`:
 

@@ -1940,6 +1940,83 @@ fn f_ml_join(x: number)
         for arch in ("x86_64", "arm64"):
             _pack_and_dual_verify(src_ml_join, "f_ml_join", arch, check_v2=True)
 
+    def test_19_hl_v11_forensic_regressions(self):
+        """Regression tests for hl-default-v11 forensic fixes:
+        1. `x & 4294967295` on x86-64 emits 1-instruction `mov D32, S32` (zero temp reg) and dual-verifies.
+        2. A proof-only `def` referenced only inside `join maintains` (not in the entry contract) is carried
+           into `.proof`'s helper spec without changing the canonical `.ode.ocl` contract ID.
+        3. Calling a contractless multi-split scalar `inline fn` >= 2 times refuses crisply at compile time.
+        4. `_matching_spec_comparisons` resolves `const NAME = INT` when matching `need compare` goals.
+        """
+        # 1. `x & 4294967295` -> 1-insn `mov r32, r32` on x86_64, dual-verified on both arches
+        src_mask32 = """\
+def low32_sum(a, b) {
+    ((a + b) % 4294967296)
+}
+
+fn f_mask32(a: number, b: number)
+    returns low32_sum(a, b)
+    trace depends on nothing
+    stack 0
+{
+    let s: u64 := (a +% b) & 4294967295
+    return s
+}
+"""
+        p_m32 = ode_unified.parse_unified(src_mask32, src="mask32.ode", c_abi_fn="f_mask32")
+        x86_lines = p_m32["fns_by_name"]["f_mask32"]["impls"]["x86_64"]["lines"]
+        self.assertTrue(any(re.match(r"mov\s+(?:e[a-z]{2}|r\d+d),\s+(?:e[a-z]{2}|r\d+d)\b", ln) for ln in x86_lines), x86_lines)
+        self.assertFalse(any(ln.startswith("and ") for ln in x86_lines), x86_lines)
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_mask32, "f_mask32", arch, check_v2=True)
+
+        # 2. Proof-only `def` referenced only in `join maintains` (not in entry contract)
+        src_proof_def = """\
+def u16_le(buf, i) { buf[i] + 256 * buf[i + 1] }
+def want_sum(buf) { buf[0] + 256 * buf[1] }
+
+fn f_proof_def(buf: n bytes, n: number)
+    requires n >= 2
+    returns want_sum(buf)
+    trace depends on n
+    stack 0
+{
+    let off: u64 := buf[0] + 256 * buf[1]
+    join maintains off == u16_le(buf, 0), off <= 65535
+    return off
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_proof_def, "f_proof_def", arch, check_v2=False)
+
+        # 3. Contractless multi-split scalar `inline fn` called >= 2 times refuses crisply
+        src_multi_split_inl = """\
+inline fn bad_dec(c: u8) -> u64 {
+    return select(c == 65, 1, select(c == 66, 2, 0))
+}
+
+fn f_bad_multi(buf: n bytes, n: number)
+    requires n >= 2
+    returns 0
+    trace depends on n
+{
+    let a := bad_dec(buf[0])
+    let b := bad_dec(buf[1])
+    return a + b
+}
+"""
+        p_ms = ode_unified.parse_unified(src_multi_split_inl, src="ms.ode", c_abi_fn="f_bad_multi")
+        for arch in ("x86_64", "arm64"):
+            err = p_ms["fns_by_name"]["f_bad_multi"]["impls"][arch].get("hl_err") or ""
+            self.assertIn("branch/select splits", err)
+            self.assertIn("returns <spec_expr>", err)
+
+        # 4. `_matching_spec_comparisons` resolves `const OP_EXIT = 149`
+        import ode_tool
+        spec_const = "const OP_EXIT = 149\ndef step(op, r0) {\n    if op == OP_EXIT then r0 else 0\n}\n"
+        hits = ode_tool._matching_spec_comparisons(spec_const, [[-149, 1]], contract={"returns": "step(a0, a1)"})
+        self.assertTrue(any("OP_EXIT = 149" in h for h in hits), hits)
+
 
 if __name__ == "__main__":
     unittest.main()
