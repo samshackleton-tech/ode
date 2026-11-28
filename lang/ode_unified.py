@@ -179,6 +179,11 @@ def is_unified(text):
             has_unified_fn = True
         elif re.match(r"^fn\s+[A-Za-z_]\w*\s*\{", line):
             has_unified_fn = True
+        elif re.match(r"^inline\s+fn\s+[A-Za-z_]\w*\s*\(", line) and (
+            "->" in line
+            or re.search(r"\b(?:var|const|u8|u32|u64|u32x4|u32x16|bytes|number|word|counter)\b", line)
+        ):
+            has_unified_fn = True
         elif re.match(r"^(use|const|def|sequence|layout|kind|lemma)\b", line):
             has_spec_def = True
         elif re.match(r"^contract\b", line):

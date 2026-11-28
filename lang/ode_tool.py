@@ -466,7 +466,7 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
         )
     if "an or of two vector registers that is no turn of each word" in reason:
         return (
-            "hint: vector bitwise `|` only proves 32-bit rotates (use `rotr32(v, k)`); "
+            "hint: vector bitwise `|` only proves 32-bit rotates (`(v >> k) | (v << (32 - k))` or `vec.rotr32(v, k)` from `std/vec.ode`); "
             "to merge lanes from two `u32x4` vectors, use `blend32(a, b, mask)` or `shufps(a, b, imm)` instead of `(a & mask) | (b & mask)`"
         )
     return None

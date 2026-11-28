@@ -98,7 +98,7 @@ The table below gives the fixed instruction lowering of each High-Level Ode cons
 | `r := select(a < b, t, f)` | eval `t` (`-%` allowed), `cmp ra, rb; cmovb rr, rt` (branchless) | eval `t`, `cmp ra, rb; csel rr, rt, rf, lo` (branchless) |
 | `while cond { ... }` / `for i in lo..hi` | adjacent `cmp` + `jcc` header; automatic `place` inheriting outer facts on names not written in the loop (`for` adds `lo <= i <= hi` and `decreases hi - i`) | adjacent `cmp` + `b.cc` header; same automatic `place` inheritance |
 | `return helper(args...)` | restore saved regs/stack, `jmp helper` (true tail call) | restore saved regs/stack, `b helper` (true tail call) |
-| `v := rotl32(v, k)` | `vprord vz, vz, 32-k` (AVX-512) or `pslld + psrld + por` | `shl + ushr + orr` (exact written order!) |
+| `v := vprord(v, k)` / `rev32_16(v)` | `vprord vz, vz, k` (`x86_64 needs avx512`) | `rev32 vv.8h, vv.8h` (`arm64` 16-bit lane rotate); multi-instruction rotates live in `std/vec.ode` (`vec.rotr32`/`vec.rotl32`) |
 | `v := bswap32(v)` | `pshufb vx, mask_bswap32` | `rev32 vv.16b, vv.16b` |
 
 ### 4.3 Automatic Proof Emission (Zero Context-Wipe Surprises)
@@ -168,8 +168,8 @@ Outer facts (`n <= 65536`, `end <= n`, `depth <= 3`) are inherited automatically
 for x86_64 needs avx {
     // Each line lowers 1-to-1 to vpaddd / vpxord / vprord in exact written order:
     for r in 0..10 unroll {
-        a0 +%= b0; d0 := rotl32(d0 ^ a0, 16); c0 +%= d0; b0 := rotl32(b0 ^ c0, 12)
-        a0 +%= b0; d0 := rotl32(d0 ^ a0,  8); c0 +%= d0; b0 := rotl32(b0 ^ c0,  7)
+        a0 +%= b0; d0 := vec.rotl32(d0 ^ a0, 16); c0 +%= d0; b0 := vec.rotl32(b0 ^ c0, 12)
+        a0 +%= b0; d0 := vec.rotl32(d0 ^ a0,  8); c0 +%= d0; b0 := vec.rotl32(b0 ^ c0,  7)
         ...
         a0 := shufi32x4(a0, 0x39); c0 := shufi32x4(c0, 0x4E); d0 := shufi32x4(d0, 0x93)
     }

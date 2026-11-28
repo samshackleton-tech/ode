@@ -1,0 +1,22 @@
+// std/bytes.ode — Ordinary, auditable byte-order load/store helpers written in High-Level Ode.
+//
+// Imported via its 52-char BLAKE3-256 digest (`ode hash std/bytes.ode`) with `--store std`.
+// Every operation expands strictly 1-to-1 into explicit byte loads/stores and shifts.
+
+inline fn load_u16_le(buf: n bytes, i: u64) -> u64 {
+    return buf[i] + (buf[i + 1] << 8)
+}
+
+inline fn load_u16_be(buf: n bytes, i: u64) -> u64 {
+    return (buf[i] << 8) + buf[i + 1]
+}
+
+inline fn store_u16_le(out: n bytes, i: u64, v: u64) {
+    out[i] := v & 255
+    out[i + 1] := (v >> 8) & 255
+}
+
+inline fn store_u16_be(out: n bytes, i: u64, v: u64) {
+    out[i] := (v >> 8) & 255
+    out[i + 1] := v & 255
+}

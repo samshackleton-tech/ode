@@ -194,6 +194,9 @@ def gen_cond(rng, vars_list, depth, buf_name=None, buf_len=16):
     return ("cmp", rng.choice(["==", "!=", "<", "<=", ">", ">="]), lhs, rhs)
 
 
+STD_STORES = (os.path.join(ROOT, "std"),)
+
+
 def compile_progs(src_text, fn_name, target, helper_names=()):
     """Compile `src_text` once for `target` and return decoded `progs` dict for `estimate.trace_memory`."""
     with tempfile.TemporaryDirectory() as td:
@@ -203,7 +206,7 @@ def compile_progs(src_text, fn_name, target, helper_names=()):
         progs = {}
         for nm in list(helper_names) + [fn_name]:
             op = os.path.join(td, f"{nm}.o")
-            odec.build(sp, nm, op, target=target)
+            odec.build(sp, nm, op, target=target, stores=STD_STORES)
             _, progs[nm] = estimate.decode_object(op, nm, target)
         return progs
 
@@ -547,8 +550,8 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
             ("or", lambda a, b: f"({a} | {b})", lambda va, vb: [x | y for x, y in zip(va, vb)]),
             ("shr", lambda a, b: f"({a} >> 7)", lambda va, vb: [x >> 7 for x in va]),
             ("shl", lambda a, b: f"({a} << 5)", lambda va, vb: [(x << 5) & M32 for x in va]),
-            ("rotl", lambda a, b: f"rotl32({a}, 11)", lambda va, vb: _rotl32(va, 11)),
-            ("rotr", lambda a, b: f"rotr32({a}, 16)", lambda va, vb: _rotr32(va, 16)),
+            ("rotl", lambda a, b: f"vec.rotl32({a}, 11)", lambda va, vb: _rotl32(va, 11)),
+            ("rotr", lambda a, b: f"vec.rotr32({a}, 16)", lambda va, vb: _rotr32(va, 16)),
             ("ulo32", lambda a, b: f"unpacklo32({a}, {b})", lambda va, vb: [va[0], vb[0], va[1], vb[1]]),
             ("uhi32", lambda a, b: f"unpackhi32({a}, {b})", lambda va, vb: [va[2], vb[2], va[3], vb[3]]),
             ("ulo64", lambda a, b: f"unpacklo64({a}, {b})", lambda va, vb: [va[0], va[1], vb[0], vb[1]]),
@@ -565,7 +568,7 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
             lines = [
                 "    var v0: u32x4 := inp.u32x4(0)",
                 "    var v1: u32x4 := inp.u32x4(16)",
-                "    let vp: u32x4 := pack_u64x2(lo64, hi64)",
+                "    let vp: u32x4 := vec.pack_u64x2(lo64, hi64)",
                 "    v0 := v0 ^ vp",
             ]
             for si, (_, fmt_fn, _) in enumerate(steps):
@@ -573,6 +576,7 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
                 lines.append(f"    {a_nm} := {fmt_fn(a_nm, b_nm)}")
             lines.append("    out.u32x4(0) := v0 ^ v1")
             src = (
+                'use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode\n'
                 "fn vec_fuzz(out: 16 bytes, inp: 32 bytes, lo64: u64, hi64: u64)\n"
                 "    requires no_overlap(out, inp)\n"
                 "    trace depends on nothing\n"

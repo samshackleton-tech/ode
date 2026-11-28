@@ -1,0 +1,54 @@
+// std/vec.ode — Ordinary, auditable vector helpers written in High-Level Ode.
+//
+// Imported via its 52-char BLAKE3-256 digest (`ode hash std/vec.ode`) with `--store std`.
+// Every operation expands strictly 1-to-1 into explicit target instructions.
+
+inline fn rotr32(v: u32x4, const k: u64) -> u32x4
+    for x86_64:avx512 {
+        return vprord(v, k)
+    }
+    for x86_64 {
+        return (v >> k) | (v << (32 - k))
+    }
+    for arm64 {
+        if k == 16 {
+            return rev32_16(v)
+        }
+        return (v >> k) | (v << (32 - k))
+    }
+
+inline fn rotl32(v: u32x4, const k: u64) -> u32x4 {
+    return rotr32(v, 32 - k)
+}
+
+inline fn rotr32_x16(v: u32x16, const k: u64) -> u32x16
+    for x86_64 {
+        return vprord(v, k)
+    }
+
+inline fn rotl32_x16(v: u32x16, const k: u64) -> u32x16
+    for x86_64 {
+        return vprord(v, 32 - k)
+    }
+
+inline fn pack_u64x2(lo: u64, hi: u64) -> u32x4 {
+    return unpacklo64(u64_to_vec(lo), u64_to_vec(hi))
+}
+
+inline fn const_u32x4(const a: u64, const b: u64, const c: u64, const d: u64) -> u32x4 {
+    return pack_u64x2(
+        (a & 4294967295) | ((b & 4294967295) << 32),
+        (c & 4294967295) | ((d & 4294967295) << 32),
+    )
+}
+
+inline fn transpose_4x4(var r0: u32x4, var r1: u32x4, var r2: u32x4, var r3: u32x4) {
+    let t0: u32x4 := unpacklo32(r0, r1)
+    let t1: u32x4 := unpackhi32(r0, r1)
+    let t2: u32x4 := unpacklo32(r2, r3)
+    let t3: u32x4 := unpackhi32(r2, r3)
+    r0 := unpacklo64(t0, t2)
+    r1 := unpackhi64(t0, t2)
+    r2 := unpacklo64(t1, t3)
+    r3 := unpackhi64(t1, t3)
+}

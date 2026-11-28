@@ -586,7 +586,7 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
 
 
 def run_static_advise(cand: Path, entry_fn: str, target: str, work: Path, input_bytes_per_call: int | None = None, extra_env: dict | None = None) -> tuple[str, dict]:
-    cmd = [ODE_PYTHON, str(ODE_TOOL), "advise", "--asm", str(cand), "--fn", entry_fn, "--target", target, "--all-archs"]
+    cmd = [ODE_PYTHON, str(ODE_TOOL), "advise", "--asm", str(cand), "--fn", entry_fn, "--target", target, "--all-archs", "--store", str(ROOT / "std")]
     rc, out, _ = run_tool(cmd, work, extra_env=extra_env)
     if rc != 0:
         return f"(ode advise exited {rc}: {out[:300]})", {"cyc_per_b": None}
@@ -735,6 +735,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                 ODE_PYTHON, str(ODE_TOOL), "pack", str(cand),
                 "--c-abi", "--fn", task["entry_fn"], "--target", target,
                 "--out", str(out_o), "--proof", str(out_p),
+                "--store", str(ROOT / "std"),
             ]
             if use_try_harder:
                 pack_cmd.append("--try-harder")

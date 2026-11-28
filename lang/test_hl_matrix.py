@@ -39,6 +39,8 @@ import refute_conc
 import run_suite
 import verify2
 
+STD_STORES = (os.path.join(ROOT, "std"),)
+
 
 def _pack_and_dual_verify(src_text, fn_name, target, extra_files=None, c_abi=True, check_v2=True):
     """Compile, prove, audit with `odeverify`, and (for scalar fns) verify with `verify2.py`."""
@@ -53,7 +55,7 @@ def _pack_and_dual_verify(src_text, fn_name, target, extra_files=None, c_abi=Tru
         out_p = td_p / "out.proof"
         res = ode_audit.pack_verified(
             str(src_p), None, str(out_o), str(out_p),
-            fn_name=fn_name, target=target, c_abi=c_abi,
+            fn_name=fn_name, target=target, c_abi=c_abi, stores=STD_STORES,
         )
         assert res["verdict"] == "shown", f"pack_verified failed ({target}): {res}"
         if check_v2:
@@ -68,7 +70,7 @@ def _compile_only(src_text, fn_name, target):
     with tempfile.TemporaryDirectory(prefix="ode_cmp_") as td:
         src_p = Path(td) / "test.ode"
         src_p.write_text(src_text, encoding="utf-8")
-        parsed = ode_unified.parse_unified_file(str(src_p), c_abi_fn=fn_name)
+        parsed = ode_unified.parse_unified_file(str(src_p), c_abi_fn=fn_name, stores=STD_STORES)
         fn = next(f for f in parsed["fns"] if f["name"] == fn_name)
         im = fn["impls"][target]
         if im.get("hl_err"):
@@ -100,12 +102,11 @@ class TestHighLevelMatrix(unittest.TestCase):
             "broadcast_u32x16": ("u32x16", "broadcast_u32x16(k)", ("x86_64",), "needs avx512"),
             "zeros_u32x16": ("u32x16", "zeros_u32x16()", ("x86_64",), "needs avx512"),
             "const_u32x4": ("u32x4", "const_u32x4(0x6A09E667)", (), ""),
-            "u32x4": ("u32x4", "u32x4(1, 2, 3, 4)", ("x86_64", "arm64"), ""),
-            "pack_u64x2": ("u32x4", "pack_u64x2(k, k)", ("x86_64", "arm64"), ""),
-            "rotl32": ("u32x4", "rotl32(a, 7)", ("x86_64", "arm64"), ""),
-            "rotr32": ("u32x4", "rotr32(a, 16)", ("x86_64", "arm64"), ""),
             "shl32": ("u32x4", "shl32(a, 3)", ("x86_64", "arm64"), ""),
             "shr32": ("u32x4", "shr32(a, 10)", ("x86_64", "arm64"), ""),
+            "u64_to_vec": ("u32x4", "u64_to_vec(k)", ("x86_64", "arm64"), ""),
+            "rev32_16": ("u32x4", "rev32_16(a)", ("arm64",), ""),
+            "vprord": ("u32x4", "vprord(a, 12)", ("x86_64",), "needs avx512"),
             "shuf32": ("u32x4", "shuf32(a, 0x39)", ("x86_64",), ""),
             "shufps": ("u32x4", "shufps(a, b, 0x88)", ("x86_64",), ""),
             "shufi32x4": ("u32x16", "shufi32x4(z0, z0, 0x4E)", ("x86_64",), "needs avx512"),
@@ -412,7 +413,8 @@ fn caller(x: u64) -> u64
             r = subprocess.run(
                 [sys.executable, os.path.join(HERE, "ode_tool.py"), "pack", str(td_p / "buggy.ode"),
                  "--c-abi", "--fn", "blake3_compress1", "--target", "x86_64",
-                 "--out", str(td_p / "b.o"), "--proof", str(td_p / "b.p")],
+                 "--out", str(td_p / "b.o"), "--proof", str(td_p / "b.p"),
+                 "--store", os.path.join(ROOT, "std")],
                 capture_output=True, text=True,
             )
             self.assertNotEqual(r.returncode, 0)
@@ -546,13 +548,11 @@ fn sum4_unroll_join(pkt: n bytes, n: number) -> u64
           5. ISA table row-count ratchet: `core/x86.tab` and `arm64/arm64.tab` never grow silently."""
         import odec
 
-        # Locked manifest of grandfathered multi-instruction vector intrinsics (exact max body insns per target).
+        # Locked manifest of multi-instruction vector intrinsics: RETIRED TO ZERO!
+        # `rotr32`, `rotl32`, `pack_u64x2`, and `const_u32x4(a,b,c,d)` now live in ordinary
+        # content-addressed `std/vec.ode`. Every vector op/intrinsic in the compiler MUST emit <= 1 insn!
         # BINDING RULE: never add an entry here without explicit approval!
-        EXPLICIT_MULTI_INSN_OPS = {
-            "rotl32": {"x86_64": 3, "arm64": 3},
-            "rotr32": {"x86_64": 3, "arm64": 3},
-            "pack_u64x2": {"x86_64": 3, "arm64": 3},
-        }
+        EXPLICIT_MULTI_INSN_OPS = {}
 
         vec_probes = [
             ("add", "x + y", ("x86_64", "arm64")),
@@ -563,8 +563,9 @@ fn sum4_unroll_join(pkt: n bytes, n: number) -> u64
             ("shl", "x << 3", ("x86_64", "arm64")),
             ("shl32", "shl32(x, 3)", ("x86_64", "arm64")),
             ("shr32", "shr32(x, 10)", ("x86_64", "arm64")),
-            ("rotl32", "rotl32(x, 7)", ("x86_64", "arm64")),
-            ("rotr32", "rotr32(x, 7)", ("x86_64", "arm64")),
+            ("u64_to_vec", "u64_to_vec(w0)", ("x86_64", "arm64")),
+            ("rev32_16", "rev32_16(x)", ("arm64",)),
+            ("vprord", "vprord(x, 12)", ("x86_64",)),
             ("unpacklo32", "unpacklo32(x, y)", ("x86_64", "arm64")),
             ("unpackhi32", "unpackhi32(x, y)", ("x86_64", "arm64")),
             ("unpacklo64", "unpacklo64(x, y)", ("x86_64", "arm64")),
@@ -577,7 +578,6 @@ fn sum4_unroll_join(pkt: n bytes, n: number) -> u64
             ("shuf32", "shuf32(x, 0x39)", ("x86_64",)),
             ("shufps", "shufps(x, y, 0x88)", ("x86_64",)),
             ("blend32", "blend32(x, y, 0x5)", ("x86_64",)),
-            ("pack_u64x2", "pack_u64x2(w0, w1)", ("x86_64", "arm64")),
         ]
         for op_name, expr, arches in vec_probes:
             src = (
@@ -1053,6 +1053,8 @@ fn read_off(buf: 256 bytes, b: number)
         # + masked `t & 0xffffffff` must verify `shown` against `bytes_of(... words(m), lo(t), hi(t))`
         # on BOTH x86_64 and arm64!
         src_u64_words = """\
+use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode
+
 def mix_u64(m, t) {
     [m[0] ^ lo(t), m[1] ^ hi(t), m[2] + m[0], m[3] + m[1]]
 }
@@ -1077,8 +1079,8 @@ fn run_mix(out: 16 bytes, m: 16 bytes, t: counter)
         }
     }
     let m_lo: u64 := acc_lo | (acc_hi << 32)
-    let v_m: u32x4 := pack_u64x2(m_lo, q1)
-    let v_t: u32x4 := pack_u64x2(t_lo | (t_hi << 32), m_lo)
+    let v_m: u32x4 := vec.pack_u64x2(m_lo, q1)
+    let v_t: u32x4 := vec.pack_u64x2(t_lo | (t_hi << 32), m_lo)
     let lo_xor: u32x4 := v_m ^ v_t
     let hi_add: u32x4 := v_m +% v_t
     out.u32x4(0) := unpacklo64(lo_xor, unpackhi64(hi_add, hi_add))
@@ -1159,8 +1161,10 @@ fn f_disjoint(a: number, b: number, d: number)
         for arch in ("x86_64", "arm64"):
             _pack_and_dual_verify(src_disjoint_zero, "f_disjoint", arch, check_v2=True)
 
-        # A3: `add64` unsigned fast-path & x86_64 `_emit_imm` `or` for constants >= 2^63 (`u32x4(0xFFFFFFFF, ...)`).
+        # A3: `add64` unsigned fast-path & x86_64 `_emit_imm` `or` for constants >= 2^63 (`vec.const_u32x4(0xFFFFFFFF, ...)`).
         src_imm64_vec = """\
+use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode
+
 def mask_hi(m) {
     [m[0] ^ word(4294967295), m[1] ^ word(4294967295), m[2] ^ word(1), m[3] ^ word(2)]
 }
@@ -1171,7 +1175,7 @@ fn f_mask(out: 16 bytes, m: 16 bytes)
     stack 64
 {
     let v: u32x4 := m.u32x4(0)
-    let k: u32x4 := u32x4(4294967295, 4294967295, 1, 2)
+    let k: u32x4 := vec.const_u32x4(4294967295, 4294967295, 1, 2)
     out.u32x4(0) := v ^ k
 }
 """

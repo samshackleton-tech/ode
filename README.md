@@ -51,6 +51,7 @@ python3 lang/ode_tool.py audit /tmp/all_zero.o --proof /tmp/all_zero.proof \
 | `paper/` | The Ode Language Report (`ODE.pdf`, `ode.typ`), the Quickstart (`quickstart.pdf`, `quickstart.typ`), tested examples, and cold-room editorial tooling |
 | `docs/` | Quickstart (`QUICKSTART.md`) and Auditor's Guide (`ODE-FOR-AUDITORS.md`) |
 | `lang/` | Unified `.ode` parser and linked local namespaces (`ode_unified.py`), canonicalizer (`ode_canon.py`), compiler (`odec.py`), packer/auditor (`ode_audit.py`), and CLI (`ode_tool.py`) |
+| `std/` | Ordinary, content-addressed helper modules (`vec.ode`, `bytes.ode`, `int.ode`) imported by BLAKE3-256 digest via `--store std` |
 | `proof-core/` | Lean 4 verifier (`Core.lean`, `Arithmetic.lean`, `Contract.lean`, `Machine.lean`, `Reader.lean`, `Trace.lean`), Lean soundness proofs (`Sound*.lean`), prover (`prove.py`), independent second verifier (`verify2.py`), and verified examples |
 | `core/` | x86-64 instruction table (`x86.tab`), table parser (`table.py`), and table rules (`RULES.md`) |
 | `arm64/` | Standalone AArch64 instruction table (`arm64.tab`), encoder/decoder, hardware cross-checks, and Lean agreement proofs against Google's `arm64-semantics` (`arm64/agree/`) |

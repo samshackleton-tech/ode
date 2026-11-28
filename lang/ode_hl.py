@@ -796,7 +796,7 @@ class HLParser:
                 if not self.peek(")"):
                     while True:
                         args.append(self.parse_expr())
-                        if not self.maybe(","):
+                        if not self.maybe(",") or self.peek(")"):
                             break
                 self.take(")")
                 return Call(nm, args, t.line)
@@ -1074,17 +1074,18 @@ def expand_unrolls(stmts, src):
 
 _INTRINSICS = frozenset({
     "load_u32x4", "store_u32x4", "load_u32x16", "store_u32x16", "broadcast_u32x16",
-    "const_u32x4", "zeros_u32x16", "rotl32", "rotr32", "shl32", "shr32",
+    "const_u32x4", "zeros_u32x16", "shl32", "shr32",
+    "vprord", "rev32_16", "u64_to_vec",
     "shuf32", "shufps", "shufi32x4",
     "unpacklo32", "unpackhi32", "unpacklo64", "unpackhi64",
-    "uzp1_32", "uzp2_32", "pack_u64x2", "u32x4",
+    "uzp1_32", "uzp2_32",
     "blend32", "ext4", "ext8", "ext12",
     "add_u32x16_data",
 })
 
 _VEC4_INTRINSICS = frozenset({
-    "load_u32x4", "const_u32x4", "shuf32", "shufps", "blend32",
-    "uzp1_32", "uzp2_32", "pack_u64x2", "u32x4",
+    "load_u32x4", "const_u32x4", "rev32_16", "u64_to_vec", "shuf32", "shufps", "blend32",
+    "uzp1_32", "uzp2_32",
     "ext4", "ext8", "ext12",
 })
 
@@ -1391,37 +1392,40 @@ def _subst_inline_stmts(stmts, vmap, emap, prefix, call_line):
     return out
 
 
-def _has_branch_or_select_expr(e):
+def _count_splits_expr(e):
     if isinstance(e, Select):
-        return True
-    if isinstance(e, (BinOp, Cmp, BoolOp)):
-        return _has_branch_or_select_expr(e.left) or _has_branch_or_select_expr(e.right)
+        return 1 + _count_splits_expr(e.cond) + _count_splits_expr(e.then_e) + _count_splits_expr(e.else_e)
+    if isinstance(e, BoolOp):
+        return 1 + _count_splits_expr(e.left) + _count_splits_expr(e.right)
+    if isinstance(e, (BinOp, Cmp)):
+        return _count_splits_expr(e.left) + _count_splits_expr(e.right)
     if isinstance(e, NotOp):
-        return _has_branch_or_select_expr(e.expr)
+        return _count_splits_expr(e.expr)
     if isinstance(e, IndexLoad):
-        return _has_branch_or_select_expr(e.idx)
+        return _count_splits_expr(e.idx)
     if isinstance(e, Call):
-        return any(_has_branch_or_select_expr(a) for a in e.args)
-    return False
+        return sum(_count_splits_expr(a) for a in e.args)
+    return 0
 
 
-def _has_branch_or_select(stmts):
+def _count_splits_stmts(stmts):
+    total = 0
     for st in stmts:
         if isinstance(st, IfStmt):
-            return True
-        if isinstance(st, LetStmt) and st.expr is not None and _has_branch_or_select_expr(st.expr):
-            return True
-        if isinstance(st, AssignStmt) and _has_branch_or_select_expr(st.expr):
-            return True
-        if isinstance(st, StoreStmt) and (_has_branch_or_select_expr(st.idx) or _has_branch_or_select_expr(st.expr)):
-            return True
-        if isinstance(st, ReturnStmt) and st.expr is not None and _has_branch_or_select_expr(st.expr):
-            return True
-        if isinstance(st, ExprStmt) and _has_branch_or_select_expr(st.expr):
-            return True
-        if isinstance(st, (WhileStmt, ForStmt, BlockStmt)) and _has_branch_or_select(st.body):
-            return True
-    return False
+            total += 1 + _count_splits_expr(st.cond) + _count_splits_stmts(st.then_body) + _count_splits_stmts(st.else_body)
+        elif isinstance(st, LetStmt) and st.expr is not None:
+            total += _count_splits_expr(st.expr)
+        elif isinstance(st, AssignStmt):
+            total += _count_splits_expr(st.expr)
+        elif isinstance(st, StoreStmt):
+            total += _count_splits_expr(st.idx) + _count_splits_expr(st.expr)
+        elif isinstance(st, ReturnStmt) and st.expr is not None:
+            total += _count_splits_expr(st.expr)
+        elif isinstance(st, ExprStmt):
+            total += _count_splits_expr(st.expr)
+        elif isinstance(st, (WhileStmt, ForStmt, BlockStmt)):
+            total += _count_splits_stmts(st.body)
+    return total
 
 
 def _stmts_has_return(stmts):
@@ -1635,7 +1639,7 @@ def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None, const_env=None
         needs_auto_join = (
             inl.returns is not None
             and inl.ret_ty in ("u64", "u32", "u8")
-            and _has_branch_or_select(body)
+            and _count_splits_stmts(body) >= 2
         )
         post_join = []
         if dst_info[0] == "return":
@@ -1949,7 +1953,7 @@ def _analyze_calls_and_vars(stmts, param_names, fn_names, self_name=None, arch=N
                 return "u32x4"
             if e.name in _VEC16_INTRINSICS:
                 return "u32x16"
-            if e.name in ("rotl32", "rotr32", "shl32", "shr32", "unpacklo32", "unpackhi32", "unpacklo64", "unpackhi64") and e.args:
+            if e.name in ("vprord", "shl32", "shr32", "unpacklo32", "unpackhi32", "unpacklo64", "unpackhi64") and e.args:
                 return infer_ty(e.args[0])
             return "u64"
         if isinstance(e, BinOp):
@@ -3926,68 +3930,40 @@ class HLLower:
                     if self.arch == "x86_64":
                         self.emit(line, f"vmovaps {dst}, xmmword ptr [rip + #{args[0].name}]")
                         return
-                    raise HLErr(f"{self.src}: line {line}: `const_u32x4` from `data` is x86-64 only; on `arm64` use `u32x4(w0, w1, w2, w3)` or `pack_u64x2(lo, hi)`")
+                    raise HLErr(
+                        f"{self.src}: line {line}: `const_u32x4` from `data` is x86-64 only; on `arm64` use "
+                        f"`unpacklo64(u64_to_vec(lo), u64_to_vec(hi))` or `std/vec.ode`'s `vec.const_u32x4`/`vec.pack_u64x2`"
+                    )
                 raise HLErr(
                     f"{self.src}: line {line}: `const_u32x4` expects a `data` label (x86-64 `vmovaps [rip + #label]`); "
-                    f"for 4 constant 32-bit words use `u32x4(w0, w1, w2, w3)` or `pack_u64x2(lo, hi)`"
+                    f"for 4 constant 32-bit words use `std/vec.ode`'s `vec.const_u32x4(w0, w1, w2, w3)` or `unpacklo64(u64_to_vec(lo), u64_to_vec(hi))`"
                 )
-            if nm == "u32x4":
-                if len(args) != 4 or not all(isinstance(a, Num) for a in args):
-                    raise HLErr(f"{self.src}: line {line}: `u32x4(w0, w1, w2, w3)` requires 4 constant 32-bit integers (for runtime scalars use `pack_u64x2(lo, hi)`)")
-                w0, w1, w2, w3 = (a.val & 0xFFFFFFFF for a in args)
-                lo64 = w0 | (w1 << 32)
-                hi64 = w2 | (w3 << 32)
-                self._eval_vec(Call("pack_u64x2", [Num(lo64, line), Num(hi64, line)], line), dst, "u32x4", s_idx)
-                return
-            if nm == "pack_u64x2":
-                if len(args) != 2:
-                    raise HLErr(f"{self.src}: line {line}: `pack_u64x2(lo, hi)` takes 2 scalar u64 arguments")
-                vtmp = self._vec_scratch("u32x4", 0)
-                if vtmp == dst:
-                    vtmp = self._vec_scratch("u32x4", 1)
-                with self._hold_expr(args[0], why="low 64-bit lane of `pack_u64x2`") as lo_r:
+            if nm == "u64_to_vec":
+                if len(args) != 1:
+                    raise HLErr(f"{self.src}: line {line}: `u64_to_vec(x)` takes 1 scalar u64 argument")
+                if ty != "u32x4":
+                    raise HLErr(f"{self.src}: line {line}: `u64_to_vec` produces a 128-bit `u32x4` vector, not `{ty}`")
+                with self._hold_expr(args[0], why="scalar operand of `u64_to_vec`") as sr:
                     if self.arch == "x86_64":
-                        self.emit(line, f"vmovq {dst}, {lo_r}")
+                        self.emit(line, f"vmovq {dst}, {sr}")
                     else:
-                        self.emit(line, f"fmov d{dst[1:]}, {lo_r}")
-                with self._hold_expr(args[1], why="high 64-bit lane of `pack_u64x2`") as hi_r:
-                    if self.arch == "x86_64":
-                        self.emit(line, f"vmovq {vtmp}, {hi_r}")
-                        self.emit(line, f"vpunpcklqdq {dst}, {dst}, {vtmp}")
-                    else:
-                        self.emit(line, f"fmov d{vtmp[1:]}, {hi_r}")
-                        self.emit(line, f"zip1 {dst}.2d, {dst}.2d, {vtmp}.2d")
+                        self.emit(line, f"fmov d{dst[1:]}, {sr}")
                 return
-            if nm in ("rotl32", "rotr32"):
-                k = args[1].val
-                r = (32 - k) if nm == "rotl32" else k
-                l = (32 - r)
-                if isinstance(args[0], Var) and args[0].name in self.var_loc and self.var_loc[args[0].name][0] == "reg":
-                    sr = self.var_loc[args[0].name][1]
-                else:
-                    # Evaluate compound/spilled operand directly into `dst` so `tmp` (from 2-reg scratch pool)
-                    # is guaranteed distinct from both `sr` and `dst`!
-                    self._eval_vec(args[0], dst, ty, s_idx)
-                    sr = dst
-                if ty == "u32x16" or (self.arch == "x86_64" and "avx512" in self.needs):
-                    self.emit(line, f"vprord {dst}, {sr}, {r}")
-                elif self.arch == "x86_64":
-                    tmp = self._vec_scratch(ty, 0)
-                    if tmp in (dst, sr):
-                        tmp = self._vec_scratch(ty, 1)
-                    self.emit(line, f"vpslld {tmp}, {sr}, {l}")
-                    self.emit(line, f"vpsrld {dst}, {sr}, {r}")
-                    self.emit(line, f"vpor {dst}, {dst}, {tmp}")
-                else:
-                    if r == 16:
-                        self.emit(line, f"rev32 {dst}.8h, {sr}.8h")
-                    else:
-                        tmp = self._vec_scratch(ty, 0)
-                        if tmp in (dst, sr):
-                            tmp = self._vec_scratch(ty, 1)
-                        self.emit(line, f"shl {tmp}.4s, {sr}.4s, {l}")
-                        self.emit(line, f"ushr {dst}.4s, {sr}.4s, {r}")
-                        self.emit(line, f"orr {dst}.16b, {dst}.16b, {tmp}.16b")
+            if nm == "rev32_16":
+                if self.arch != "arm64":
+                    raise HLErr(f"{self.src}: line {line}: `rev32_16` (`rev32.8h`) is `arm64` NEON only")
+                if ty != "u32x4" or len(args) != 1:
+                    raise HLErr(f"{self.src}: line {line}: `rev32_16(v)` takes 1 `u32x4` argument")
+                sr = self._as_vec_reg(args[0], ty, s_idx)
+                self.emit(line, f"rev32 {dst}.8h, {sr}.8h")
+                return
+            if nm == "vprord":
+                if self.arch != "x86_64":
+                    raise HLErr(f"{self.src}: line {line}: `vprord` (AVX-512) is `x86_64` only")
+                if len(args) != 2 or not isinstance(args[1], Num) or not (0 <= args[1].val < 32):
+                    raise HLErr(f"{self.src}: line {line}: `vprord(v, k)` requires a constant shift `0 <= k < 32`")
+                sr = self._as_vec_reg(args[0], ty, s_idx)
+                self.emit(line, f"vprord {dst}, {sr}, {args[1].val}")
                 return
             if nm in ("shl32", "shr32"):
                 op = "<<" if nm == "shl32" else ">>"
@@ -4101,9 +4077,10 @@ class HLLower:
                 return
             raise HLErr(
                 f"{self.src}: line {line}: unknown vector intrinsic `{nm}` "
-                f"(portable u32x4 ops: `pack_u64x2(lo,hi)`, `v >> k`, `v << k`, `rotl32(v,k)`, `rotr32(v,k)`, "
+                f"(portable 1-to-1 u32x4 ops: `u64_to_vec(x)`, `v >> k`, `v << k`, "
                 f"`unpacklo32`/`unpackhi32`/`unpacklo64`/`unpackhi64`, `uzp1_32`/`uzp2_32`, `ext4`/`ext8`/`ext12`; "
-                f"x86-64 only: `const_u32x4(data_label)`, `shuf32(v,imm)`, `shufps`, `blend32`)"
+                f"x86-64 only: `const_u32x4(data_label)`, `vprord(v,k)`, `shuf32(v,imm)`, `shufps`, `blend32`; "
+                f"arm64 only: `rev32_16(v)`; for `rotr32`/`rotl32`/`pack_u64x2`/`const_u32x4` import `std/vec.ode` via `--store std`)"
             )
         raise HLErr(f"{self.src}: line {line}: unsupported vector expression")
 

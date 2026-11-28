@@ -1,16 +1,17 @@
 use spec = "2obgvxo5y6cn27cz7gn4mxieudnb4chhosahlutaeauwmgfhzqwq"  // blake3_compress1_spec.ode
+use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode
 
 data b3_iv_lo = 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A
 
 inline fn g_half(var v0: u32x4, var v1: u32x4, var v2: u32x4, var v3: u32x4, mx: u32x4, my: u32x4) {
     v0 := (v0 + v1) + mx
-    v3 := rotr32(v3 ^ v0, 16)
+    v3 := vec.rotr32(v3 ^ v0, 16)
     v2 := v2 + v3
-    v1 := rotr32(v1 ^ v2, 12)
+    v1 := vec.rotr32(v1 ^ v2, 12)
     v0 := (v0 + v1) + my
-    v3 := rotr32(v3 ^ v0, 8)
+    v3 := vec.rotr32(v3 ^ v0, 8)
     v2 := v2 + v3
-    v1 := rotr32(v1 ^ v2, 7)
+    v1 := vec.rotr32(v1 ^ v2, 7)
 }
 
 inline fn perm_x86(var m0: u32x4, var m1: u32x4, var m2: u32x4, var m3: u32x4) {
@@ -61,7 +62,7 @@ for x86_64 needs avx needs avx512 {
     var v0: u32x4 := h.u32x4(0)
     var v1: u32x4 := h.u32x4(16)
     var v2: u32x4 := const_u32x4(b3_iv_lo)
-    var v3: u32x4 := pack_u64x2(t, length + (flags << 32))
+    var v3: u32x4 := vec.pack_u64x2(t, length + (flags << 32))
     let b0: u32x4 := m.u32x4(0)
     let b1: u32x4 := m.u32x4(16)
     var m0: u32x4 := uzp1_32(b0, b1)
@@ -95,8 +96,8 @@ for x86_64 needs avx needs avx512 {
 for arm64 {
     var v0: u32x4 := h.u32x4(0)
     var v1: u32x4 := h.u32x4(16)
-    var v2: u32x4 := u32x4(0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A)
-    var v3: u32x4 := pack_u64x2(t, length + (flags << 32))
+    var v2: u32x4 := vec.const_u32x4(0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A)
+    var v3: u32x4 := vec.pack_u64x2(t, length + (flags << 32))
     let b0: u32x4 := m.u32x4(0)
     let b1: u32x4 := m.u32x4(16)
     var m0: u32x4 := uzp1_32(b0, b1)

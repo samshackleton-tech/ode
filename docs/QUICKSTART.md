@@ -181,27 +181,37 @@ Portable functions use a single `{ ... }` body. When you want architecture-speci
 |---|---|---|
 | Unaligned vector load | `let v: u32x4 := inp.u32x4(off)` / `inp.u32x16(off)` | `vmovdqu` / `vmovdqu32` (`x86_64`); `ldr qN, [base, off]` (`arm64`) |
 | Unaligned vector store | `out.u32x4(off) := v` / `out.u32x16(off) := v` | `vmovdqu` / `vmovdqu32` (`x86_64`); `str qN, [base, off]` (`arm64`) |
-| Vector packing / broadcast | `pack_u64x2(lo, hi)`, `const_u32x4(data_label)` (`x86_64`), `broadcast_u32x16(w)` (`x86_64`) | `vmovq`+`vpunpcklqdq` / `fmov`+`zip1.2d`; `vmovaps [rip + #label]`; `vpbroadcastd` |
+| Vector scalar load / broadcast | `u64_to_vec(x)`, `const_u32x4(data_label)` (`x86_64`), `broadcast_u32x16(w)` (`x86_64`) | `vmovq` / `fmov dN, r`; `vmovaps [rip + #label]`; `vpbroadcastd` |
 | 32-bit lane add / xor / and / or | `a +% b` (or `a +%= b`), `a ^ b`, `a & b`, `a \| b` | `vpaddd`, `vpxord`, `vpand`, `vpor` / `add.4s`, `eor.16b`, `and.16b`, `orr.16b` |
-| 32-bit lane shift & rotate | `a >> k`, `a << k`, `rotl32(a, k)`, `rotr32(a, k)` | `vpsrld`/`vpslld`, `vprord` (`avx512`) or shift+or / `ushr.4s`/`shl.4s`, `rev32.8h` (`k=16`) or shift+orr (`arm64`) |
+| 32-bit lane shift & 1-insn rotate | `a >> k`, `a << k`, `vprord(a, k)` (`x86_64 needs avx512`), `rev32_16(a)` (`arm64`) | `vpsrld`/`vpslld`, `vprord` (`x86_64`); `ushr.4s`/`shl.4s`, `rev32.8h` (`arm64`) |
 | 128-bit lane rotate / align | `ext4(a, b)`, `ext8(a, b)`, `ext12(a, b)` | `vpalignr` (`x86_64`) / `ext.16b` (`arm64`) |
 | 32-bit lane shuffle / unpack | `unpacklo32/hi32(a, b)`, `unpacklo64/hi64(a, b)`, `uzp1_32/uzp2_32(a, b)`; `x86_64` only: `shuf32(a, imm)`, `shufps(a, b, imm)`, `blend32(a, b, imm)`, `shufi32x4(a, b, imm)` | `vpunpckldq`/`hdq`/`lqdq`, `vshufps`, `vpshufd`, `vpblendd`, `vshufi32x4` / `zip1.4s`/`zip2.4s`/`zip1.2d`/`zip2.2d`/`uzp1.4s`/`uzp2.4s` (`arm64`) |
 
-On AArch64, `u32x4` uses up to 22 caller-saved NEON registers (`v0..v7, v16..v29`, keeping `v8..v15` untouched with zero stack pushes; declare `stack var` for any extra vectors). On x86-64, `u32x4` uses `xmm1..xmm14` and `u32x16` uses `zmm1..zmm30` (emitting `vzeroupper` automatically on exit). Raw assembly from `core/x86.tab` and `arm64/arm64.tab` also remains accepted inside `for x86_64 { ... }` / `for arm64 { ... }` blocks whenever you want full manual register control.
+On AArch64, `u32x4` uses up to 22 caller-saved NEON registers (`v0..v7, v16..v29`, keeping `v8..v15` preserved with zero stack pushes; declare `stack var` or `stack(arm64) var` for any extra vectors). On x86-64, `u32x4` uses `xmm1..xmm14` and `u32x16` uses `zmm1..zmm30` (emitting `vzeroupper` automatically on exit). Raw assembly from `core/x86.tab` and `arm64/arm64.tab` also remains accepted inside `for x86_64 { ... }` / `for arm64 { ... }` blocks whenever you want full manual register control.
 
-### Zero-Overhead Helpers (`inline fn`)
+### Zero-Overhead Helpers (`inline fn`) and the Ordinary `std/` Library
 
-To share repeated sequences (round functions, bit-packing steps, header-length helpers) with zero call overhead and without losing surrounding path facts across a call boundary, define a hygienic `inline fn` with by-value or by-reference (`var`) parameters:
+To share repeated sequences (round functions, bit-packing steps, target-specialized rotates, constant-multiplier expansions) with zero call overhead and without losing surrounding path facts across a call boundary, define a hygienic `inline fn` with by-value, `var`, or compile-time `const` parameters, optional return type (`-> ty`), optional contract clauses (`requires` checked strictly at every call site via a non-generalizing `check`), and optional per-target `for <target>[:variant]` arms:
 
 ```ode
+use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode
+
 inline fn mix_step(var a: u32x4, var b: u32x4, c: u32x4) {
     a +%= b
-    b := rotr32(b ^ a, 8)
+    b := vec.rotr32(b ^ a, 8)
     a +%= c
 }
 ```
 
-At each call site `mix_step(v0, v1, m0)`, `var` parameters alias the caller's live variables directly (zero copies, zero stack slots), value parameters bind fresh hygienic locals, and the expanded code is verified in place alongside the caller. Unlike separate `fn` helpers, `inline fn` needs no separate contract — use separate `fn` helpers only when you want to break up exponential branch/select paths or share code across multiple call sites.
+At each call site `mix_step(v0, v1, m0)`, `var` parameters alias the caller's live variables directly (zero copies, zero stack slots), `const` parameters fold at compile time (eliminating dead `if` branches and unrolling `for ... unroll` loops), value parameters bind fresh hygienic locals, and the expanded code is verified in place alongside the caller.
+
+Ordinary, auditable helper modules live in `std/` and carry zero special compiler privilege — import them by their 52-character BLAKE3-256 digest (`ode hash std/*.ode`) with `--store std`:
+
+| Module | BLAKE3-256 digest (`ode hash`) | Helpers |
+|---|---|---|
+| `std/vec.ode` | `7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa` | `rotr32`, `rotl32` (`vprord` on `x86_64:avx512`, `rev32_16` on `arm64` for `k == 16`, explicit shift-or otherwise), `rotr32_x16`, `rotl32_x16`, `pack_u64x2`, `const_u32x4`, `transpose_4x4` |
+| `std/bytes.ode` | `ozgki74ogmdvuzubstiqnse5xlh2guawnta5dmhrmaqokwp3dfqa` | `load_u16_le`, `load_u16_be`, `store_u16_le`, `store_u16_be` |
+| `std/int.ode` | `raeybpdavam7upiziaktzghulvfgv6er54pcn6xjgiq7uuoc6kvq` | `mul_const(x, const k)`, `min_u64`, `max_u64`, `clamp_u64` (with standalone-auditable contracts and `def min2`/`max2`/`clamp`) |
 
 ---
 

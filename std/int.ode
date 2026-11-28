@@ -1,0 +1,42 @@
+// std/int.ode — Ordinary, auditable integer helpers written in High-Level Ode.
+//
+// Imported via its 52-char BLAKE3-256 digest (`ode hash std/int.ode`) with `--store std`.
+// Every operation expands strictly 1-to-1 into explicit target instructions.
+
+def min2(a, b) { if a <= b then a else b }
+def max2(a, b) { if a >= b then a else b }
+def clamp(x, lo, hi) { if x < lo then lo else if x > hi then hi else x }
+
+inline fn mul_const(x: u64, const k: u64) -> u64 {
+    var acc: u64 := 0
+    for bit in 0..64 unroll {
+        if ((k >> bit) & 1) == 1 {
+            if bit == 0 {
+                acc += x
+            } else {
+                acc += x << bit
+            }
+        }
+    }
+    return acc
+}
+
+inline fn min_u64(a: u64, b: u64) -> u64
+    returns min2(a, b)
+{
+    return select(a <= b, a, b)
+}
+
+inline fn max_u64(a: u64, b: u64) -> u64
+    returns max2(a, b)
+{
+    return select(a >= b, a, b)
+}
+
+inline fn clamp_u64(x: u64, lo: u64, hi: u64) -> u64
+    requires lo <= hi
+    returns clamp(x, lo, hi)
+{
+    let t: u64 := max_u64(x, lo)
+    return min_u64(t, hi)
+}

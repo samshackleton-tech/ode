@@ -1,16 +1,17 @@
 use spec = "km4xv2ty4swyagxpuc27cbyq5cl5wovaxnuir7me5psvckvckeua"  // blake3_compress_4way_spec.ode
+use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode
 
 data b3_iv_lo = 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A
 
 inline fn g_half(var v0: u32x4, var v1: u32x4, var v2: u32x4, var v3: u32x4, mx: u32x4, my: u32x4) {
     v0 := (v0 + v1) + mx
-    v3 := rotr32(v3 ^ v0, 16)
+    v3 := vec.rotr32(v3 ^ v0, 16)
     v2 := v2 + v3
-    v1 := rotr32(v1 ^ v2, 12)
+    v1 := vec.rotr32(v1 ^ v2, 12)
     v0 := (v0 + v1) + my
-    v3 := rotr32(v3 ^ v0, 8)
+    v3 := vec.rotr32(v3 ^ v0, 8)
     v2 := v2 + v3
-    v1 := rotr32(v1 ^ v2, 7)
+    v1 := vec.rotr32(v1 ^ v2, 7)
 }
 
 inline fn perm_x86(var m0: u32x4, var m1: u32x4, var m2: u32x4, var m3: u32x4) {
@@ -98,7 +99,7 @@ for arm64 {
     for blk in 0..4 unroll {
         var v0: u32x4 := cvs.u32x4(blk * 32)
         var v1: u32x4 := cvs.u32x4(blk * 32 + 16)
-        var v2: u32x4 := u32x4(0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A)
+        var v2: u32x4 := vec.const_u32x4(0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A)
         var v3: u32x4 := metas.u32x4(blk * 16)
         let b0: u32x4 := blocks.u32x4(blk * 64)
         let b1: u32x4 := blocks.u32x4(blk * 64 + 16)

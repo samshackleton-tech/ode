@@ -12,6 +12,9 @@ import ode_audit
 import ode_tool
 
 
+STD_STORES = (os.path.join(ROOT, "std"),)
+
+
 def _dual_verify(testcase, src_text, fn_name, targets=("x86_64", "arm64"), check_verify2=True):
     odeverify = os.path.join(ROOT, "proof-core", ".lake", "build", "bin", "odeverify")
     if not os.path.exists(odeverify):
@@ -23,7 +26,7 @@ def _dual_verify(testcase, src_text, fn_name, targets=("x86_64", "arm64"), check
                 f.write(src_text)
             out_o = os.path.join(d, "out.o")
             out_p = os.path.join(d, "out.proof")
-            res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name=fn_name, target=target)
+            res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name=fn_name, target=target, stores=STD_STORES)
             testcase.assertEqual(res["verdict"], "shown", f"{fn_name}/{target}: {res}")
             if check_verify2:
                 dump = os.path.join(d, "dump.sh")
@@ -320,8 +323,10 @@ fn call_swapped(x: u64, y: u64) -> u64
         _dual_verify(self, src, "call_swapped", check_verify2=True)
 
     def test_09_simd_u32x4_unroll_vprord_and_ext(self):
-        """Typed `u32x4` + `unroll` + `rotl32` (`vprord` on avx512, `rev32.8h` on arm64) + `ext4` verify with 0 spills."""
+        """Typed `u32x4` + `unroll` + `std/vec.ode`'s `vec.rotl32` (`vprord` on avx512, `rev32.8h` on arm64) + `ext4` verify with 0 spills."""
         src = """
+use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode
+
 def arx1(w) {
     let s0 = ((w[0] + w[4]) ^ w[4]) >>> 16
     let s1 = ((w[1] + w[5]) ^ w[5]) >>> 16
@@ -340,7 +345,7 @@ fn hl_vec_add(out: 16 bytes, inp: 32 bytes)
         var b: u32x4 := inp.u32x4(16)
         a +%= b
         a ^= b
-        a := rotl32(a, 16)
+        a := vec.rotl32(a, 16)
         a := ext4(a, a)
         out.u32x4(0) := a
     }
@@ -349,7 +354,7 @@ fn hl_vec_add(out: 16 bytes, inp: 32 bytes)
         var b: u32x4 := inp.u32x4(16)
         a +%= b
         a ^= b
-        a := rotl32(a, 16)
+        a := vec.rotl32(a, 16)
         a := ext4(a, a)
         out.u32x4(0) := a
     }
@@ -358,8 +363,10 @@ fn hl_vec_add(out: 16 bytes, inp: 32 bytes)
         _dual_verify(self, src, "hl_vec_add", check_verify2=False)
 
     def test_10_nested_rotl_non_avx512_and_u8_var_name(self):
-        """2-reg vector scratch handles `rotl32(u8 + b, 12)` on both arm64 and non-avx512 x86_64, and `u8` as var name."""
+        """2-reg vector scratch handles `vec.rotl32(u8 + b, 12)` on both arm64 and non-avx512 x86_64, and `u8` as var name."""
         src = """
+use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode
+
 def arx12(w) {
     let s0 = (w[0] + w[4]) >>> 20
     let s1 = (w[1] + w[5]) >>> 20
@@ -375,13 +382,13 @@ fn hl_rotl_nested(out: 16 bytes, inp: 32 bytes)
     for x86_64 needs avx {
         let u8: u32x4 := inp.u32x4(0)
         var b: u32x4 := inp.u32x4(16)
-        b := rotl32(u8 + b, 12)
+        b := vec.rotl32(u8 + b, 12)
         out.u32x4(0) := b
     }
     for arm64 {
         let u8: u32x4 := inp.u32x4(0)
         var b: u32x4 := inp.u32x4(16)
-        b := rotl32(u8 + b, 12)
+        b := vec.rotl32(u8 + b, 12)
         out.u32x4(0) := b
     }
 }
@@ -632,6 +639,8 @@ fn hl_bad_copy(src: n bytes, out: 16 bytes, n: number) -> u64
     def test_19_wirth_inline_fn_var_and_sha256_big_sigma(self):
         """Wirth `inline fn (var ...)` by-reference expansion + portable 9-line `sha256_big_sigma_4x` on both arches."""
         src = """
+use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode
+
 def sig0(x) { (x >>> 2) ^ (x >>> 13) ^ (x >>> 22) }
 def sig1(x) { (x >>> 6) ^ (x >>> 11) ^ (x >>> 25) }
 def big_sigma_4x(a, e) {
@@ -642,7 +651,7 @@ def big_sigma_4x(a, e) {
 }
 
 inline fn add_sig1(var acc: u32x4, e: u32x4) {
-    let s1: u32x4 := rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)
+    let s1: u32x4 := vec.rotr32(e, 6) ^ vec.rotr32(e, 11) ^ vec.rotr32(e, 25)
     acc +%= s1
 }
 
@@ -653,14 +662,14 @@ fn hl_sha256_big_sigma_4x(out: 16 bytes, a: 16 bytes, e: 16 bytes)
 for x86_64 needs avx {
     let va: u32x4 := a.u32x4(0)
     let ve: u32x4 := e.u32x4(0)
-    var acc: u32x4 := rotr32(va, 2) ^ rotr32(va, 13) ^ rotr32(va, 22)
+    var acc: u32x4 := vec.rotr32(va, 2) ^ vec.rotr32(va, 13) ^ vec.rotr32(va, 22)
     add_sig1(acc, ve)
     out.u32x4(0) := acc
 }
 for arm64 {
     let va: u32x4 := a.u32x4(0)
     let ve: u32x4 := e.u32x4(0)
-    var acc: u32x4 := rotr32(va, 2) ^ rotr32(va, 13) ^ rotr32(va, 22)
+    var acc: u32x4 := vec.rotr32(va, 2) ^ vec.rotr32(va, 13) ^ vec.rotr32(va, 22)
     add_sig1(acc, ve)
     out.u32x4(0) := acc
 }
@@ -674,20 +683,21 @@ for arm64 {
         h_b3 = ode_unified.module_hash_file(spec_src)
         src = ("""
 use b3 = "__H_B3__"  // blake3_spec.ode
+use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode
 
 data one_iv = 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A
 
 inline fn g_half(var a: u32x4, var b: u32x4, var c: u32x4, var d: u32x4, mx: u32x4, my: u32x4) {
     a +%= mx
     a +%= b
-    d := rotr32(d ^ a, 16)
+    d := vec.rotr32(d ^ a, 16)
     c +%= d
-    b := rotr32(b ^ c, 12)
+    b := vec.rotr32(b ^ c, 12)
     a +%= my
     a +%= b
-    d := rotr32(d ^ a, 8)
+    d := vec.rotr32(d ^ a, 8)
     c +%= d
-    b := rotr32(b ^ c, 7)
+    b := vec.rotr32(b ^ c, 7)
 }
 
 inline fn perm_x86(var m0: u32x4, var m1: u32x4, var m2: u32x4, var m3: u32x4) {
@@ -738,7 +748,7 @@ for x86_64 needs avx needs avx512 {
     var v0: u32x4 := h.u32x4(0)
     var v1: u32x4 := h.u32x4(16)
     var v2: u32x4 := const_u32x4(one_iv)
-    var v3: u32x4 := pack_u64x2(t, length + (flags << 32))
+    var v3: u32x4 := vec.pack_u64x2(t, length + (flags << 32))
     let b0: u32x4 := m.u32x4(0)
     let b1: u32x4 := m.u32x4(16)
     var m0: u32x4 := uzp1_32(b0, b1)
@@ -772,8 +782,8 @@ for x86_64 needs avx needs avx512 {
 for arm64 {
     var v0: u32x4 := h.u32x4(0)
     var v1: u32x4 := h.u32x4(16)
-    var v2: u32x4 := u32x4(0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A)
-    var v3: u32x4 := pack_u64x2(t, length + (flags << 32))
+    var v2: u32x4 := vec.const_u32x4(0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A)
+    var v3: u32x4 := vec.pack_u64x2(t, length + (flags << 32))
     let b0: u32x4 := m.u32x4(0)
     let b1: u32x4 := m.u32x4(16)
     var m0: u32x4 := uzp1_32(b0, b1)
@@ -816,7 +826,7 @@ for arm64 {
             for tgt in ("x86_64", "arm64"):
                 out_o = os.path.join(d, f"c1_{tgt}.o")
                 out_p = os.path.join(d, f"c1_{tgt}.proof")
-                res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="hl_b3_compress1", target=tgt, c_abi=True)
+                res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="hl_b3_compress1", target=tgt, c_abi=True, stores=STD_STORES)
                 self.assertEqual(res["verdict"], "shown")
 
     def test_21_nested_select_no_scratch_clobber(self):
