@@ -1,4 +1,4 @@
-use spec = "weighted_sum_spec.ode"
+use spec = "untujqjtr7sld2gngyxc2qulhulrfh35zxed7odf3zwkami5wuea"  // weighted_sum_spec.ode
 
 fn weighted_sum(a: n bytes, n: number)
     requires n <= 4096

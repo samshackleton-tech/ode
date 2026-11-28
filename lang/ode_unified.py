@@ -27,9 +27,21 @@ for _d in (HERE, os.path.join(ROOT, "kcheck")):
         sys.path.insert(0, _d)
 
 import ode
+import ode_canon
 import ode_hl
 
 TARGETS = ("x86_64", "arm64")
+
+
+def module_hash_bytes(data):
+    """Return the 52-char lowercase RFC 4648 base-32 BLAKE3-256 digest of a `.ode` module's raw bytes."""
+    return ode_canon.blake3_b32(data)
+
+
+def module_hash_file(path):
+    """Return the 52-char lowercase RFC 4648 base-32 BLAKE3-256 digest of the `.ode` file at `path`."""
+    with open(path, "rb") as f:
+        return ode_canon.blake3_b32(f.read())
 
 
 class UnifiedErr(ValueError):
@@ -606,20 +618,30 @@ def _parse_single_unified(text, src="<ode>"):
         line_no = text.count("\n", 0, pos) + 1
         rest = text[pos:]
 
-        # 0. `use ALIAS = "relative/path.ode"` (explicit linked local namespace)
+        # 0. `use ALIAS = "<52-char-blake3-256>"` (content-addressed linked local namespace)
         m = re.match(r'^use\s+([A-Za-z_]\w*)\s*=\s*"([^"]+)"\s*(?://[^\n]*)?(?:\n|$)', rest)
         if m:
-            alias, rel_path = m.group(1), m.group(2)
+            alias, digest = m.group(1), m.group(2)
             if alias in ("frame", "budget", "reg", "place", "for", "if", "loop", "else", "let"):
                 raise UnifiedErr(f"{src}: line {line_no}: `{alias}` cannot be used as a module alias")
+            if not ode_canon.B32_RE.fullmatch(digest):
+                hint = ""
+                if os.path.isfile(src):
+                    cand = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(src)), digest))
+                    if os.path.isfile(cand):
+                        hint = f'\n  use {alias} = "{module_hash_file(cand)}"  // BLAKE3-256 of {digest}'
+                raise UnifiedErr(
+                    f'{src}: line {line_no}: `use` takes a 52-char lowercase base-32 BLAKE3-256 module digest, '
+                    f'not "{digest}" (run `ode hash <file.ode>`){hint}'
+                )
             claim("use", alias, line_no)
-            uses.append((alias, rel_path, line_no))
+            uses.append((alias, digest, line_no))
             pos = _skip_ws_and_comments(text, pos + m.end())
             continue
         if re.match(r"^use\b", rest):
             snippet = rest[:50].splitlines()[0]
             raise UnifiedErr(
-                f'{src}: line {line_no}: expected `use ALIAS = "path.ode"`, got {snippet!r}'
+                f'{src}: line {line_no}: expected `use ALIAS = "<52-char-blake3-256>"`, got {snippet!r}'
             )
 
         # 1. `def`, `sequence`, `layout` (brace-delimited spec blocks)
@@ -1225,13 +1247,14 @@ def _rewrite_asm_lines(lines, first_line, fn_params, mod_prefix, mod_exports, us
     return out
 
 
-def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None):
-    """Parse a unified `.ode` source file (closed local namespace) and resolve any `use` links.
+def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None, stores=()):
+    """Parse a unified `.ode` source file (closed local namespace) and resolve content-addressed `use` links.
 
     Returns a dict:
       - `spec_defs`: list of raw top-level `const`/`def`/`sequence`/`layout`/`kind`/`lemma` blocks
       - `data`: list of `(arch_or_None, name, [words])`
       - `inlines`: list of `(arch_or_None, raw_inline_text, start_line)`
+      - `hl_inlines`: list of structured High-Level `inline fn` records
       - `fns`: list of function dicts in topological source order (dependencies before root):
           {name, symbol, params_text, clauses_text, line, impls: {key: impl_dict}}
       - `fns_by_name`: {name: fn_dict}
@@ -1257,62 +1280,113 @@ def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None):
             "pretty_names": {},
         }
 
-    if not os.path.isfile(src):
-        raise UnifiedErr(f"{src}: `use` requires a source file path on disk")
+    store_dirs = [os.path.abspath(d) for d in (stores or ()) if d]
+    dir_index_cache = {}  # abs_dir -> {digest: (full_path, raw_bytes)}
 
-    root_real = os.path.realpath(src)
-    mods = {}      # realpath -> module record
-    order = []     # realpaths in post-order (dependencies before dependents, root last)
-    visiting = []  # stack of realpaths for cycle detection
+    def _index_dir(d):
+        if d in dir_index_cache:
+            return dir_index_cache[d]
+        idx = {}
+        if os.path.isdir(d):
+            for entry in sorted(os.listdir(d)):
+                if not entry.endswith(".ode"):
+                    continue
+                fp = os.path.join(d, entry)
+                if not os.path.isfile(fp):
+                    continue
+                with open(fp, "rb") as f:
+                    raw_b = f.read()
+                h = ode_canon.blake3_b32(raw_b)
+                if h not in idx:
+                    idx[h] = (fp, raw_b)
+        dir_index_cache[d] = idx
+        return idx
 
-    def load_mod(path, raw_text=None):
-        real = os.path.realpath(path)
-        if real in visiting:
-            cyc = " -> ".join(os.path.basename(p) for p in visiting[visiting.index(real):] + [real])
+    def _resolve_digest(digest, cur_path, alias, lno):
+        search_dirs = []
+        if cur_path and os.path.isfile(cur_path):
+            d0 = os.path.dirname(os.path.abspath(cur_path))
+            search_dirs.append(d0)
+        for sd in store_dirs:
+            if sd not in search_dirs:
+                search_dirs.append(sd)
+        # 1. Fast O(1) lookup for `<dir>/<digest>.ode` with strict BLAKE3-256 verification.
+        for d in search_dirs:
+            cand = os.path.join(d, f"{digest}.ode")
+            if os.path.isfile(cand):
+                with open(cand, "rb") as f:
+                    raw_b = f.read()
+                got = ode_canon.blake3_b32(raw_b)
+                if got != digest:
+                    raise UnifiedErr(
+                        f"{cur_path}: line {lno}: integrity mismatch for `{cand}`: "
+                        f"BLAKE3-256 is `{got}`, expected `{digest}`"
+                    )
+                return cand, raw_b.decode("utf-8")
+        # 2. Content-indexed lookup across `*.ode` files in each searched directory.
+        avail = []
+        for d in search_dirs:
+            idx = _index_dir(d)
+            if digest in idx:
+                fp, raw_b = idx[digest]
+                return fp, raw_b.decode("utf-8")
+            for h, (fp, _) in sorted(idx.items(), key=lambda kv: os.path.basename(kv[1][0])):
+                avail.append(f"{os.path.basename(fp)} = {h}")
+        dirs_s = ", ".join(search_dirs) if search_dirs else "(none)"
+        avail_s = ""
+        if avail:
+            shown = avail[:10]
+            more = f" (+{len(avail) - 10} more)" if len(avail) > 10 else ""
+            avail_s = "\n  available modules: " + ", ".join(shown) + more
+        raise UnifiedErr(
+            f'{cur_path}: line {lno}: `use {alias} = "{digest}"`: module digest not found in [{dirs_s}]; '
+            f'pass `--store DIR` or place the module beside the importing file{avail_s}'
+        )
+
+    ROOT_KEY = "__root__"
+    mods = {}      # digest (or ROOT_KEY) -> module record
+    order = []     # keys in post-order (dependencies before dependents, root last)
+    visiting = []  # stack of keys for cycle detection
+
+    def load_mod(key, path, raw_text=None):
+        if key in visiting:
+            cyc = " -> ".join(visiting[visiting.index(key):] + [key])
             raise UnifiedErr(f"{path}: circular `use` dependency: {cyc}")
-        if real in mods:
-            return mods[real]
-        visiting.append(real)
-        if raw_text is None:
-            if not os.path.isfile(path):
-                raise UnifiedErr(f"cannot open `use`d file `{path}`")
-            with open(path, "r", encoding="utf-8") as f:
-                raw_text = f.read()
+        if key in mods:
+            return mods[key]
+        visiting.append(key)
         parsed = _parse_single_unified(raw_text, path)
-        base_dir = os.path.dirname(os.path.abspath(path))
         dep_map = {}
-        for alias, rel, lno in parsed["uses"]:
-            dep_path = os.path.normpath(os.path.join(base_dir, rel))
-            if not os.path.isfile(dep_path):
-                raise UnifiedErr(f'{path}: line {lno}: `use {alias} = "{rel}"`: file not found ({dep_path})')
-            dep_mod = load_mod(dep_path)
+        for alias, digest, lno in parsed["uses"]:
+            dep_path, dep_text = _resolve_digest(digest, path, alias, lno)
+            dep_mod = load_mod(digest, dep_path, raw_text=dep_text)
             dep_map[alias] = dep_mod
         visiting.pop()
         rec = {
             "path": path,
-            "real": real,
-            "rel": os.path.basename(path),
+            "key": key,
+            "rel": os.path.basename(path) if path else key,
             "parsed": parsed,
             "exports": parsed["exports"],
             "dep_map": dep_map,
             "prefix": "",
         }
-        mods[real] = rec
-        order.append(real)
+        mods[key] = rec
+        order.append(key)
         return rec
 
-    load_mod(src, raw_text=text)
+    load_mod(ROOT_KEY, src, raw_text=text)
 
     # Assign deterministic prefixes: imported modules get `m1__`, `m2__`, ...; root gets `""`.
     idx = 1
-    for real in order:
-        if real != root_real:
-            mods[real]["prefix"] = f"m{idx}__"
+    for mkey in order:
+        if mkey != ROOT_KEY:
+            mods[mkey]["prefix"] = f"m{idx}__"
             idx += 1
 
     # Record readable glossary names (`m1__foo` -> `alias.foo`) for root's direct uses.
     pretty_names = {}
-    root_mod = mods[root_real]
+    root_mod = mods[ROOT_KEY]
     for alias, dep in root_mod["dep_map"].items():
         for exp_name in dep["exports"]:
             pretty_names[dep["prefix"] + exp_name] = f"{alias}.{exp_name}"
@@ -1325,8 +1399,8 @@ def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None):
     merged_fns_by_name = {}
     root_fns = []
 
-    for real in order:
-        mod = mods[real]
+    for mkey in order:
+        mod = mods[mkey]
         p = mod["parsed"]
         pref = mod["prefix"]
         exps = mod["exports"]
@@ -1413,7 +1487,7 @@ def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None):
             }
             merged_fns.append(new_fn)
             merged_fns_by_name[new_name] = new_fn
-            if real == root_real:
+            if mkey == ROOT_KEY:
                 root_fns.append(new_fn)
 
     _lower_all_hl(
@@ -1505,12 +1579,12 @@ def _contract_text_for(fn_rec, impl, include_calling=False):
     return f"contract {fn_rec['symbol']}({fn_rec['params_text']}) {{\n    {body}\n}}"
 
 
-def extract_spec(parsed, target_key=None, fn_name=None, include_calling=False, src="<ode>"):
+def extract_spec(parsed, target_key=None, fn_name=None, include_calling=False, src="<ode>", fn_names=None):
     """Extract Ode specification text from a parsed unified `.ode` file.
 
     - If `fn_name` is given: emits `spec_defs` + ONLY `fn_name`'s contract (used by `ode canon`).
     - If `fn_name` is None: emits `spec_defs` + contracts for every `fn` that has an implementation
-      for `target_key` (or every `fn` if `target_key` is None), used by `statement.py`/`prove.py`.
+      for `target_key` (filtered to `fn_names` when given, pruning unreachable imported functions).
     - When `include_calling=False` (for `.ocl` canonicalization): `calling { ... }` is NEVER emitted.
     """
     blocks = list(parsed["spec_defs"])
@@ -1536,7 +1610,10 @@ def extract_spec(parsed, target_key=None, fn_name=None, include_calling=False, s
         ode.Spec(full)
         return full, fn_rec["symbol"]
 
+    keep_set = set(fn_names) if fn_names is not None else None
     for fn_rec in parsed["fns"]:
+        if keep_set is not None and fn_rec["name"] not in keep_set and fn_rec["symbol"] not in keep_set:
+            continue
         impl = _select_impl(fn_rec, target_key, src)
         if target_key is not None and fn_rec["impls"] and impl is None:
             continue

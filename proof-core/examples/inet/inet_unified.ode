@@ -1,5 +1,5 @@
 // Full RFC 1071 Internet Checksum for x86-64 and AArch64 (`stack 0`, `trace depends on n` only).
-use rfc = "inet_spec.ode"
+use rfc = "hrayz2eygz2l5yyrxeu6zf5ckntstldll4p4eijbrxhmgvhradga"  // inet_spec.ode
 
 inline fn fold_x86 for x86_64 (acc: gpr, tmp: gpr) distinct(acc, tmp) changes acc, tmp {
     mov tmp, acc

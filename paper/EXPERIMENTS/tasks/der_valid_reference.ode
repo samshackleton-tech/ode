@@ -1,4 +1,4 @@
-use spec = "der_valid_spec.ode"
+use spec = "tnysjfpacbfkbh2oms4mepxfyntpuun4ln4udnlu4wv4aavsbtuq"  // der_valid_spec.ode
 
 fn bitstr_low_zero_fn(b: number, u: number)
     requires b <= 255

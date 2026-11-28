@@ -1,5 +1,5 @@
 // Strict RFC 3629 UTF-8 validator and code-point counter for x86-64 and AArch64 (`stack 0`).
-use u8 = "utf8_spec.ode"
+use u8 = "qcydduv2hvtobhhha3yalkmki2xqraza4trsbyv2z3enjclnkbua"  // utf8_spec.ode
 
 fn utf8_validate(a: n bytes, n: number)
     requires n < 18446744073709551615

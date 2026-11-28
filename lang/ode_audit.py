@@ -1309,6 +1309,7 @@ def pack_verified(
     existing_bundle_proof=None,
     c_abi=False,
     parsed_override=None,
+    stores=(),
 ):
     """Compile `.ode`, bind symbol to `ode_<52-char-b32>`, embed `.ode.ocl`, prove, and audit.
 
@@ -1324,9 +1325,9 @@ def pack_verified(
 
     if unified:
         parsed = parsed_override if parsed_override is not None else ode_unified.parse_unified(
-            src_text, source_path, c_abi_fn=(fn_name if c_abi else None)
+            src_text, source_path, c_abi_fn=(fn_name if c_abi else None), stores=stores,
         )
-        arch, _, _, fns = odec.source(src_text, source_path, target=target, parsed=parsed)
+        arch, _, _, fns = odec.source(src_text, source_path, target=target, parsed=parsed, stores=stores)
         if not fns:
             raise ValueError(f"{source_path}: no `fn` found for target {target!r}")
         chosen_fn = fn_name or fns[-1][0]
@@ -1396,7 +1397,8 @@ def pack_verified(
 
         if len(topo_fns) > 1:
             full_spec_text, _ = ode_unified.extract_spec(
-                parsed, target_key=use_target, fn_name=None, include_calling=True, src=source_path
+                parsed, target_key=use_target, fn_name=None, include_calling=True,
+                src=source_path, fn_names=topo_fns,
             )
             unit_elfs = [compiled[n]["elf"] for n in topo_fns]
             orig_order = [compiled[n]["symbol"] for n in topo_fns]
@@ -1520,14 +1522,14 @@ def pack_verified(
     return audit_res
 
 
-def audit_inlines(source_path, target=None, verify_bin=None):
+def audit_inlines(source_path, target=None, verify_bin=None, stores=()):
     """Independently verify every contracted non-`const`/non-`var` `inline fn` declared in `source_path`
     across its target arm(s), returning a list of `{name, target, verdict, contract_id}` dicts."""
     import ode_unified
     src_text = odec.read_source(source_path)
     if not ode_unified.is_unified(src_text):
         return []
-    parsed = ode_unified.parse_unified(src_text, source_path)
+    parsed = ode_unified.parse_unified(src_text, source_path, stores=stores)
     results = []
     for inl_rec in parsed.get("hl_inlines", ()):
         if not inl_rec.get("auditable"):
@@ -1541,7 +1543,7 @@ def audit_inlines(source_path, target=None, verify_bin=None):
                 res = pack_verified(
                     source_path, None, out_o, out_p,
                     fn_name=inl_rec["name"], target=tk,
-                    verify_bin=verify_bin, c_abi=True, parsed_override=syn,
+                    verify_bin=verify_bin, c_abi=True, parsed_override=syn, stores=stores,
                 )
                 results.append({
                     "name": inl_rec["name"],
@@ -1556,13 +1558,13 @@ def audit_inlines(source_path, target=None, verify_bin=None):
 # Concrete specification evaluator (`ode_tool.py spec-test`)
 # ---------------------------------------------------------------------------
 
-def run_spec_test(ocl_path, fn_name, raw_args, glossary_path=None):
+def run_spec_test(ocl_path, fn_name, raw_args, glossary_path=None, stores=()):
     """Evaluate a definition inside a `.ocl` or unified `.ode` file on concrete JSON inputs."""
     import ode_unified
     with open(ocl_path, "r", encoding="utf-8") as f:
         text = f.read()
     if ode_unified.is_unified(text):
-        parsed = ode_unified.parse_unified(text, ocl_path)
+        parsed = ode_unified.parse_unified(text, ocl_path, stores=stores)
         text = "\n\n".join(parsed["spec_defs"]) + "\n"
         sp = ode.Spec(text)
     else:

@@ -1,4 +1,4 @@
-use bpf = "ebpf_spec.ode"
+use bpf = "we6mimwdznekdsel5i5svepltsryti4loss5dsuxdu7mrc4hbodq"  // ebpf_spec.ode
 
 fn ebpf_alu_fn(op: u64, lhs: u64, rhs: u64)
     requires op <= 255

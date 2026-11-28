@@ -6,7 +6,7 @@
   "spec_basename": "header_score_spec.ode",
   "entry_fn": "header_score",
   "expected_contract_id": "hrslejxv4lnql6e53janwkl7tjtgn7oydsuja33hgvgktnbwwehq",
-  "contract_header": "use spec = \"header_score_spec.ode\"\n\nfn header_score(h: n bytes, n: number)\n    requires n == 16\n    returns spec.header_score(h)\n    trace depends on h, n\n    stack 0\n",
+  "contract_header": "use spec = \"bourqgxpsrzluwqzc3svwwby2izmw3vn2svqtqylbyrqaqwsax3q\"  // header_score_spec.ode\n\nfn header_score(h: n bytes, n: number)\n    requires n == 16\n    returns spec.header_score(h)\n    trace depends on h, n\n    stack 0\n",
   "reference_solution": "paper/EXPERIMENTS/tasks/header_score_reference.ode",
   "native_harness": "paper/EXPERIMENTS/tasks/header_score_native.c"
 }

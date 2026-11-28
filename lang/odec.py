@@ -249,7 +249,7 @@ def inline_of(src, n, name, params, clauses, body, target="x86_64"):
     return Inline(name, n, ps, distinct, changes, body)
 
 
-def source(text, src="the source", target=None, parsed=None):
+def source(text, src="the source", target=None, parsed=None, stores=()):
     """A source read: (its target, its data, its inline functions, its functions), as
     (name, [(name, [words])], {name: Inline}, [(name, symbol, lines, the number of the first of them)]).
     Supports both unified `.ode` files (with contracts on `fn` and multi-arch `for <arch>` blocks)
@@ -257,7 +257,7 @@ def source(text, src="the source", target=None, parsed=None):
     import ode_unified
     if parsed is not None or ode_unified.is_unified(text):
         if parsed is None:
-            parsed = ode_unified.parse_unified(text, src)
+            parsed = ode_unified.parse_unified(text, src, stores=stores)
         arch, u_data, u_inlines, u_fns = ode_unified.target_source_view(parsed, target, src)
         inlines = {}
         for raw_inl, lno in u_inlines:
@@ -795,34 +795,34 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
     return out
 
 
-def found(src, name, with_target=False, target=None, parsed=None):
+def found(src, name, with_target=False, target=None, parsed=None, stores=()):
     """(the data, the symbol, the numbered lines, the source's inline functions) of the function NAME of a source."""
-    arch, data, inlines, fns = source("" if parsed is not None else read_source(src), src, target=target, parsed=parsed)
+    arch, data, inlines, fns = source("" if parsed is not None else read_source(src), src, target=target, parsed=parsed, stores=stores)
     got = [(symbol, [(first + k, line) for k, line in enumerate(lines)]) for n, symbol, lines, first in fns if n == name]
     if len(got) != 1: sys.exit(f"{src}: no `fn {name}`")
     res = (data, got[0][0], got[0][1], inlines)
     return (arch, *res) if with_target else res
 
 
-def instructions(text, name, src="the source", notes=None, target=None):
+def instructions(text, name, src="the source", notes=None, target=None, stores=()):
     """The instructions of the function NAME of a source's text, as expand() gives them."""
-    arch, _, inlines, fns = source(text, src, target=target)
+    arch, _, inlines, fns = source(text, src, target=target, stores=stores)
     got = [[(first + k, line) for k, line in enumerate(lines)] for n, _, lines, first in fns if n == name]
     if len(got) != 1: sys.exit(f"{src}: no `fn {name}`")
     return expand(src, name, got[0], inlines, notes, target=arch)
 
 
-def assembly(src, name, symbol=None, target=None):
+def assembly(src, name, symbol=None, target=None, stores=()):
     """The assembly of a function of the source, with the data it names: its lines, the uses of inline
     functions and the fors expanded, under its symbol (or `symbol`, for a test's copy). No instruction is
     added or changed. Its other entries (`entry "NAME"`) are names of their own; and where the source has a
     `place`, how many bytes into the function it is, as four bytes in a section `.ode.place` that is not
     loaded (the assembler knows the number; place_of() gives the rest of the place's proof)."""
-    target, data, own, lines, inlines = found(src, name, with_target=True, target=target)
+    target, data, own, lines, inlines = found(src, name, with_target=True, target=target, stores=stores)
     symbol = symbol or own
     notes = []
     ins = expand(src, name, lines, inlines, notes, target=target)
-    notes = [note for note in notes if note[0] != "at"]         # (the places for proof-core's prover are no part of the object)
+    notes = [note for note in notes if note[0] not in ("at", "check", "wrap")]         # (prover annotations are no part of the object)
     for note in sorted(notes, key=lambda n: -n[1]):             # from the last, so the numbers before it stay
         ins[note[1]:note[1]] = [f".Lode_place_{name}:"] if note[0] == "place" else [f".global {note[2]}", f"{note[2]}:"]
     # A leading alignment directive belongs before the entry symbols, not
@@ -890,27 +890,27 @@ def elf(src, name, symbol, expanded, typed, notes, data, where=None, target="x86
         raise SystemExit(f"odec: {src}: fn {name}: {e}") from None
 
 
-def _contract_params_for(src, name, parsed=None):
+def _contract_params_for(src, name, parsed=None, stores=()):
     """Return the contract parameter names for unified `fn NAME(...)`, or None for legacy sources."""
     import ode_unified
     if parsed is None:
         text = read_source(src)
         if not ode_unified.is_unified(text):
             return None
-        parsed = ode_unified.parse_unified(text, src)
+        parsed = ode_unified.parse_unified(text, src, stores=stores)
     for fn_rec in parsed["fns"]:
         if fn_rec["name"] == name:
             return ode_unified._collect_param_names(fn_rec["params_text"])
     return set()
 
 
-def compile_info(src, name, symbol=None, target=None, parsed=None):
+def compile_info(src, name, symbol=None, target=None, parsed=None, stores=()):
     """Compile one function to ELF bytes and return its full metadata (target, symbol, ELF bytes, exact
     pc-to-source line_map, user register names, frame layout, label offsets, and per-entry places text)."""
-    target, data, own, lines, inlines = found(src, name, with_target=True, target=target, parsed=parsed)
+    target, data, own, lines, inlines = found(src, name, with_target=True, target=target, parsed=parsed, stores=stores)
     sym = symbol or own
     notes, typed, meta = [], [], {}
-    cparams = _contract_params_for(src, name, parsed=parsed)
+    cparams = _contract_params_for(src, name, parsed=parsed, stores=stores)
     expanded = expand(src, name, lines, inlines, notes, typed, target=target, meta=meta, contract_params=cparams)
     entries = {sym} | {note[2] for note in notes if note[0] == "entry"}
     for note in notes:
@@ -988,24 +988,24 @@ def compile_info(src, name, symbol=None, target=None, parsed=None):
     }
 
 
-def build(src, name, obj, symbol=None, target=None):
+def build(src, name, obj, symbol=None, target=None, stores=()):
     """Write a function's ELF object using the instruction table."""
-    target, data, own, lines, inlines = found(src, name, with_target=True, target=target)
+    target, data, own, lines, inlines = found(src, name, with_target=True, target=target, stores=stores)
     notes, typed = [], []
     expanded = expand(src, name, lines, inlines, notes, typed, target=target)
-    blob = elf(src, name, symbol or own, expanded, typed, [note for note in notes if note[0] not in ("at", "wrap")], data, target=target)
+    blob = elf(src, name, symbol or own, expanded, typed, [note for note in notes if note[0] not in ("at", "check", "wrap")], data, target=target)
     with open(obj, "wb") as f: f.write(blob)
 
 
-def places(src, name, entry=None, target=None):
+def places(src, name, entry=None, target=None, stores=()):
     """What a function's source says holds at its places, as the prover of proof-core reads it (prove.prove):
     for each `place { LINES }` of the function, `place +0xN { LINES }`, N being the count of bytes from the
     function's first byte to the instruction the place stands before. With `entry` (the symbol of an
     `entry "SYMBOL"` of the function): the places written `place "SYMBOL" { LINES }`, counted from that
     entry. "" where there is none. The object is not changed by its places: build() leaves them out."""
-    target, data, own, lines, inlines = found(src, name, with_target=True, target=target)
+    target, data, own, lines, inlines = found(src, name, with_target=True, target=target, stores=stores)
     notes, typed = [], []
-    cparams = _contract_params_for(src, name)
+    cparams = _contract_params_for(src, name, stores=stores)
     expanded = expand(src, name, lines, inlines, notes, typed, target=target, contract_params=cparams)
     entries = {own} | {note[2] for note in notes if note[0] == "entry"}
     if (entry or own) not in entries: sys.exit(f"{src}: fn {name} has no entry `{entry}`")

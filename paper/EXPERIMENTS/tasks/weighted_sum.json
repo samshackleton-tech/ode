@@ -7,6 +7,6 @@
   "expected_contract_id": "dlj5zmyx5h52zjp64x66mwebhrwevsttwvvbbgujxktxk6eat4vq",
   "reference_solution": "paper/EXPERIMENTS/tasks/weighted_sum_reference.ode",
   "native_harness": "paper/EXPERIMENTS/tasks/weighted_sum_native.c",
-  "contract_header": "use spec = \"weighted_sum_spec.ode\"\n\nfn weighted_sum(a: n bytes, n: number)\n    requires n <= 4096\n    returns spec.weighted_sum(a)\n    trace depends on n\n    stack 0\n",
+  "contract_header": "use spec = \"untujqjtr7sld2gngyxc2qulhulrfh35zxed7odf3zwkami5wuea\"  // weighted_sum_spec.ode\n\nfn weighted_sum(a: n bytes, n: number)\n    requires n <= 4096\n    returns spec.weighted_sum(a)\n    trace depends on n\n    stack 0\n",
   "task_summary": "Implement `weighted_sum(a, n)`, returning the exact nested running sum `s2` where each byte step updates `s1 += a[i]` and `s2 += s1` across `a[0 .. n-1]`, with `trace depends on n` (no data-dependent branches or memory addresses) and `stack 0`. Your goal is BOTH full verification (`shown`) AND maximum loop throughput (minimizing cycles per byte `cyc/B` for large inputs such as `n = 4096` bytes across target CPUs)."
 }

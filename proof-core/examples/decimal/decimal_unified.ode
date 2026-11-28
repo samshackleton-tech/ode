@@ -1,5 +1,5 @@
 // ASCII decimal integer parser (0..999,999,999) for x86-64 and AArch64 (`stack 0`).
-use dec = "decimal_spec.ode"
+use dec = "ifgmynfhtpichjn7vemh5c2z2nsjyhq4kr7hmdfpboppmgkhvjoa"  // decimal_spec.ode
 
 fn parse_decimal(a: n bytes, n: number)
     returns dec.parse_decimal(a)

@@ -1,4 +1,4 @@
-use spec = "ct_base64_decode_spec.ode"
+use spec = "rvp5rdmmqprcrnoonholzl5ui74mpffwfy7mhsnrplhuo46dgnkq"  // ct_base64_decode_spec.ode
 
 // Constant-time helper: decode one Base64 byte `c` into packed `(ok * 64 + val)`.
 // Uses only monotone `cmov*` (x86-64) / `csel` (AArch64): zero branches, zero memory loads.

@@ -7,6 +7,6 @@
   "expected_contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
   "reference_solution": "paper/EXPERIMENTS/tasks/byte_sum_reference.ode",
   "native_harness": "paper/EXPERIMENTS/tasks/byte_sum_native.c",
-  "contract_header": "use spec = \"byte_sum_spec.ode\"\n\nfn byte_sum(a: n bytes, n: number)\n    requires n <= 1048576\n    returns spec.byte_sum(a)\n    trace depends on n\n    stack 0\n",
+  "contract_header": "use spec = \"n5o4vitubew6gh2somiofk25h6sxsrbnyi3kmae2kqpt75pzrzsa\"  // byte_sum_spec.ode\n\nfn byte_sum(a: n bytes, n: number)\n    requires n <= 1048576\n    returns spec.byte_sum(a)\n    trace depends on n\n    stack 0\n",
   "task_summary": "Implement `byte_sum(a, n)`, returning the exact sum of all `n` unsigned bytes in `a[0 .. n-1]` with `trace depends on n` (no data-dependent branches or memory addresses) and `stack 0`. Your goal is BOTH full verification (`shown`) AND maximum loop throughput (minimizing cycles per byte `cyc/B` for large inputs such as `n = 4096` bytes across target CPUs)."
 }

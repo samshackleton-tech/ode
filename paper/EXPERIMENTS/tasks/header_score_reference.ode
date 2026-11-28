@@ -1,4 +1,4 @@
-use spec = "header_score_spec.ode"
+use spec = "bourqgxpsrzluwqzc3svwwby2izmw3vn2svqtqylbyrqaqwsax3q"  // header_score_spec.ode
 
 fn header_score(h: n bytes, n: number)
     requires n == 16

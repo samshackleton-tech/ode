@@ -245,37 +245,42 @@ fn inc2_fn(x: u64) -> u64
     return x + 2
 }
 """
-        main_src = """
-use h = "helper.ode"
+        with tempfile.TemporaryDirectory() as d:
+            hp = os.path.join(d, "helper.ode")
+            mp = os.path.join(d, "main.ode")
+            tp = os.path.join(d, "top.ode")
+            with open(hp, "w", encoding="utf-8") as f:
+                f.write(helper_src)
+            h_helper = ode_unified.module_hash_file(hp)
+            main_src = f"""
+use h = "{h_helper}"
 
 fn entry_inc4(x: u64) -> u64
     requires 0 <= x, x <= 1500
     returns x + 4
     trace depends on x
-{
+{{
     let a := h.inc2_fn(x)
     return h.inc2_fn(a)
-}
+}}
 """
-        top_src = """
-use m = "main.ode"
+            with open(mp, "w", encoding="utf-8") as f:
+                f.write(main_src)
+            h_main = ode_unified.module_hash_file(mp)
+            top_src = f"""
+use m = "{h_main}"
 
 fn top_inc8(x: u64) -> u64
     requires 0 <= x, x <= 1000
     returns x + 8
     trace depends on x
-{
+{{
     let a := m.entry_inc4(x)
     return m.entry_inc4(a)
-}
+}}
 """
-        with tempfile.TemporaryDirectory() as d:
-            hp = os.path.join(d, "helper.ode")
-            mp = os.path.join(d, "main.ode")
-            tp = os.path.join(d, "top.ode")
-            for path, txt in ((hp, helper_src), (mp, main_src), (tp, top_src)):
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(txt)
+            with open(tp, "w", encoding="utf-8") as f:
+                f.write(top_src)
             # When `main.ode` is imported by `top.ode`, BOTH `inc2_fn` AND `entry_inc4` get Ode fast calling automatically!
             p_top = ode_unified.parse_unified(top_src, tp, c_abi_fn="top_inc8")
             self.assertIsNone(p_top["fns_by_name"]["top_inc8"]["impls"]["x86_64"]["calling_text"])
@@ -664,8 +669,11 @@ for arm64 {
 
     def test_20_blake3_compress1_pure_hl_both_arches(self):
         """Full 7-round BLAKE3 1-block compression in 100% pure High-Level Ode verifies on both x86_64 and arm64."""
-        src = """
-use b3 = "blake3_spec.ode"
+        import ode_unified
+        spec_src = os.path.join(HERE, "..", "proof-core", "examples", "hashr_arm64_fast", "blake3_spec.ode")
+        h_b3 = ode_unified.module_hash_file(spec_src)
+        src = ("""
+use b3 = "__H_B3__"  // blake3_spec.ode
 
 data one_iv = 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A
 
@@ -798,9 +806,8 @@ for arm64 {
     h.u32x4(0) := v0 ^ v2
     h.u32x4(16) := v1 ^ v3
 }
-"""
+""").replace("__H_B3__", h_b3)
         import shutil
-        spec_src = os.path.join(HERE, "..", "proof-core", "examples", "hashr_arm64_fast", "blake3_spec.ode")
         with tempfile.TemporaryDirectory() as d:
             shutil.copy2(spec_src, os.path.join(d, "blake3_spec.ode"))
             src_p = os.path.join(d, "b3_c1.ode")

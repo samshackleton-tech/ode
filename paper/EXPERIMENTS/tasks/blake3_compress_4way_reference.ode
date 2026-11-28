@@ -1,4 +1,4 @@
-use spec = "blake3_compress_4way_spec.ode"
+use spec = "km4xv2ty4swyagxpuc27cbyq5cl5wovaxnuir7me5psvckvckeua"  // blake3_compress_4way_spec.ode
 
 data b3_iv_lo = 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A
 

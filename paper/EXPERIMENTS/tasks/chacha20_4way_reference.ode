@@ -1,4 +1,4 @@
-use spec = "chacha20_4way_spec.ode"
+use spec = "r6y26tckd64yc2ryvfe6ekd6tcepzrjmksdufiqqx6xmqvoix2ta"  // chacha20_4way_spec.ode
 
 inline fn qr_x86 for x86_64 (a: xmm, b: xmm, c: xmm, d: xmm)
     distinct(a, b, c, d)

@@ -31,6 +31,7 @@ HAVE_LEAN = os.path.isfile(os.path.join(HERE, ".lake", "build", "bin", "odeverif
 ARM_MACHINE = platform.machine() in ("arm64", "aarch64")
 CC = shutil.which("clang") or shutil.which("cc")
 SRC = os.path.join(HASHER, "xof_unified.ode")
+STORES = (os.path.join(HERE, "examples", "hashr_arm64_fast"),)
 CONTRACT_B32 = "mploeb55ucqzcztg4qz26czekw5lccs2le5m2pdmjccoz4e24ala"
 
 # Official BLAKE3 XOF output (first 64 bytes = counter 0, next 64 bytes = counter 1) for empty input:
@@ -46,8 +47,8 @@ WANT_EMPTY_T1 = (
 
 class TestXofUnified(unittest.TestCase):
     def test_01_same_canonical_contract_both_targets(self):
-        c_x86 = ode_canon.canonicalize_file(SRC, target="x86_64")
-        c_arm = ode_canon.canonicalize_file(SRC, target="arm64")
+        c_x86 = ode_canon.canonicalize_file(SRC, target="x86_64", stores=STORES)
+        c_arm = ode_canon.canonicalize_file(SRC, target="arm64", stores=STORES)
         self.assertEqual(c_x86["contract_id"], CONTRACT_B32)
         self.assertEqual(c_arm["contract_id"], CONTRACT_B32)
 
@@ -57,14 +58,14 @@ class TestXofUnified(unittest.TestCase):
             for tgt, want_insns in (("x86_64", 115), ("arm64", 125)):
                 out_o = os.path.join(d, f"xof_{tgt}.o")
                 out_p = os.path.join(d, f"xof_{tgt}.proof")
-                res = ode_audit.pack_verified(SRC, None, out_o, out_p, target=tgt)
+                res = ode_audit.pack_verified(SRC, None, out_o, out_p, target=tgt, stores=STORES)
                 self.assertEqual(res["verdict"], "shown", res)
                 self.assertEqual(res["contract_b32"], CONTRACT_B32)
                 self.assertEqual(res["coverage"]["instructions"], want_insns)
 
     @unittest.skipUnless(ARM_MACHINE and CC, "requires AArch64 hardware with C compiler")
     def test_03_native_arm64_xof_vectors(self):
-        inf = odec.compile_info(SRC, "compress_xof", target="arm64")
+        inf = odec.compile_info(SRC, "compress_xof", target="arm64", stores=STORES)
         with tempfile.TemporaryDirectory() as d:
             obj_p = os.path.join(d, "xof.o")
             with open(obj_p, "wb") as f:

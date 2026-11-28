@@ -1,5 +1,5 @@
 {
-  "contract_header": "use spec = \"ct_lt_spec.ode\"\n\nfn ct_bytes_lt(a: n bytes, b: n bytes, n: number)\n    requires n < 1000000000\n    returns spec.bytes_lt(a, b)\n    trace depends on n\n    stack 0\n",
+  "contract_header": "use spec = \"dgq3l4gvriw55as3gylubcaxotdgyg2wfanwfra72ri3doo5ayva\"  // ct_lt_spec.ode\n\nfn ct_bytes_lt(a: n bytes, b: n bytes, n: number)\n    requires n < 1000000000\n    returns spec.bytes_lt(a, b)\n    trace depends on n\n    stack 0\n",
   "entry_fn": "ct_bytes_lt",
   "expected_contract_id": "z5mi7h56f2qwr2uqti72jtovd26jpjh3e2ue7vw2l5v5vwxudzna",
   "id": "ct_lt",

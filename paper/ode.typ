@@ -428,13 +428,13 @@ Figure 4 shows both target blocks of `all_zero`. Whenever control reaches `@loop
 
 == Multi-File Programs (`use`)
 
-Larger programs split pure specifications from target implementations, or share helper libraries across files, via explicit linked local namespaces:
+Larger programs split pure specifications from target implementations, or share helper libraries across files, via content-addressed linked local namespaces identified by each module file's 52-character lowercase base-32 BLAKE3-256 digest (`ode hash <file.ode>`):
 
 ```
-use eq = "hash_eq_ct_spec.ode"
+use eq = "yhus24dbjyhcm7qaoeef2ryezipmeszgofacitqnywda6uqpypdq" // hash_eq_ct_spec.ode
 ```
 
-Imported definitions and functions are referenced only through their local alias (`eq.ct_bytes_eq`). Imports are non-transitive (importing `B` does not expose `B`'s imports), and shared diamond dependencies are deduplicated. Reorganizing identical definitions across `use`-linked files produces the exact same canonical `.ocl` contract and 52-character BLAKE3 identifier as a single file.
+`ode` looks up module digests in the importing file's directory and in any explicit `--store DIR` directories granted by the caller, verifying the file's BLAKE3-256 digest before parsing. Imported definitions and functions are referenced only through their local alias (`eq.ct_bytes_eq`). Imports are non-transitive (importing `B` does not expose `B`'s imports), and shared diamond dependencies are deduplicated by content digest. Reorganizing identical definitions across `use`-linked files produces the exact same canonical `.ocl` contract and 52-character BLAKE3 identifier as a single file.
 
 // ============================================================================
 // 5. Calls
@@ -687,6 +687,7 @@ Every command below is invoked from the repository root as `python3 lang/ode_too
     [`audit OBJ --proof PROOF [--expect-contract ID] [--show-contract]`], [Bob's check (section 6): verifies 100% of `.text`, checks `.ode.ocl` against `ID`, and prints the verified contract with `--show-contract`.],
     [`spec-test OCL --call NAME --arg JSON [--glossary G]`], [Evaluates a contract definition on JSON inputs (`NAME` is a canonical name like `f0`, or an authored name when `--glossary` is given).],
     [`canon SRC [--fn NAME] [--out-dir DIR]`], [Prints the 52-character BLAKE3 identifier; with `--out-dir`, writes `<ID>.ocl`.],
+    [`hash FILE...`], [Prints the 52-character lowercase base-32 BLAKE3-256 module digest for each `.ode` file (for `use` imports).],
     [`pack SRC --fn NAME --target T --out OBJ --proof PROOF`], [Compiles (`T` = `x86_64` or `arm64`), proves, packs `.o` + `.proof`, and audits them.],
     [`check SRC [--fn NAME] [--target T]`], [Development loop: compiles, proves, verifies, and reports counterexamples on failure.],
     [`advise SRC --fn NAME`], [Reports static code-size, cache-line, and `budget` diagnostics (section 7.3).],

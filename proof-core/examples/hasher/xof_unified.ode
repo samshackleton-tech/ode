@@ -1,7 +1,7 @@
 // BLAKE3 64-byte XOF root output block for x86-64 (AVX-512VL) and AArch64 (NEON).
 // Zero stack, zero read-only data, constant-time (`trace depends on nothing`).
-use b3 = "../hashr_arm64_fast/blake3_spec.ode"
-use xof = "xof_spec.ode"
+use b3 = "ya6gqve7vxwsty67gvln6hr4lxkvo2vmknwk4l3prxrvtmuetiqq"  // blake3_spec.ode
+use xof = "g3dlfbqfrgtdvukhq3gcbmxdnlfhvkwhsvdct7i2xvlkwva5qjga"  // xof_spec.ode
 
 inline fn g_sse2 for x86_64 (a: xmm, b: xmm, c: xmm, d: xmm, x: xmm, y: xmm, t: xmm) distinct(a, b, c, d, x, y, t) changes a, b, c, d, t {
   paddd a, x

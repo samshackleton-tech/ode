@@ -1,6 +1,6 @@
 // 4-way NEON BLAKE3 kernel for AArch64 (unified `.ode` with linked local namespace).
-use b3 = "blake3_spec.ode"
-use comp = "compress_arm64.ode"
+use b3 = "ya6gqve7vxwsty67gvln6hr4lxkvo2vmknwk4l3prxrvtmuetiqq"  // blake3_spec.ode
+use comp = "r74eijstebwgwmyayvlwv4k6lxhlgv6oglwzoyuzroavfkg4b7yq"  // compress_arm64.ode
 
 // 4-way NEON 4-KiB BLAKE3 subtree kernel for AArch64 (`ldr q`/`str q` indexed loads/stores,
 // resident v0..v7 CVs across all 16 blocks, resident v28..v31 for m[0..3]).

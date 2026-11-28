@@ -1,5 +1,5 @@
 // Full RFC 1950 Adler-32 checksum for x86-64 and AArch64 (unified `.ode`, `stack 0`).
-use a32 = "adler32_spec.ode"
+use a32 = "ty5a64jkzvuqqtljqamh4dfwhrrsdpzc6kjeuasdmcrdxhidgdla"  // adler32_spec.ode
 
 fn adler32(input: len bytes, len: number)
     returns a32.adler32(input)

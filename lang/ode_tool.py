@@ -39,16 +39,16 @@ CALLEE_SAVED_ARM = {f"x{i}" for i in range(19, 31)}
 M64 = 1 << 64
 
 
-def compile_source(src_path, fn_names=None, target=None):
+def compile_source(src_path, fn_names=None, target=None, stores=()):
     """Compile selected (or all) functions of an Ode source file via odec.compile_info."""
     text = odec.read_source(src_path)
-    arch, _, _, fns = odec.source(text, src_path, target=target)
+    arch, _, _, fns = odec.source(text, src_path, target=target, stores=stores)
     want = fn_names if fn_names else [name for name, _, _, _ in fns]
     if not want:
         raise ValueError(f"{src_path}: source contains no `fn` definitions")
     compiled = []
     for name in want:
-        compiled.append(odec.compile_info(src_path, name, target=target))
+        compiled.append(odec.compile_info(src_path, name, target=target, stores=stores))
     return arch, compiled
 
 
@@ -662,7 +662,7 @@ def _contracts_map(spec_text):
 
 
 def run_check(src_path, spec_path=None, fn_names=None, out_dir=None, arch=None,
-              do_trace=False, align=0, arg_overrides=None, budgets=None, includes=None, target=None):
+              do_trace=False, align=0, arg_overrides=None, budgets=None, includes=None, target=None, stores=()):
     """Compile -> prove -> verify via `odeverify` -> optional performance & memory advice.
     Returns a structured dict with verdict (`shown`, `refused`, `no proof found`, or `FALSE`),
     timings, diagnostics mapped to source lines, decoded arithmetic goals, and advice."""
@@ -670,12 +670,12 @@ def run_check(src_path, spec_path=None, fn_names=None, out_dir=None, arch=None,
     t0 = time.time()
     src_text = odec.read_source(src_path)
     unified = ode_unified.is_unified(src_text)
-    resolved_target, compiled = compile_source(src_path, fn_names, target=target)
+    resolved_target, compiled = compile_source(src_path, fn_names, target=target, stores=stores)
     t_compile = time.time() - t0
     by_sym = {info["symbol"]: info for info in compiled}
 
     if unified and spec_path is None:
-        parsed = ode_unified.parse_unified(src_text, src_path)
+        parsed = ode_unified.parse_unified(src_text, src_path, stores=stores)
         spec_text, _ = ode_unified.extract_spec(parsed, target_key=target or resolved_target, include_calling=True, src=src_path)
     elif spec_path is None:
         raise SystemExit(
@@ -828,10 +828,10 @@ def run_check(src_path, spec_path=None, fn_names=None, out_dir=None, arch=None,
 
 
 def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False,
-               align=0, arg_overrides=None, budgets=None, includes=None, target=None, all_archs=False, show_asm=False):
+               align=0, arg_overrides=None, budgets=None, includes=None, target=None, all_archs=False, show_asm=False, stores=()):
     """Compile and run static + optional memory advice without invoking Lean."""
     import ode_hl, ode_unified
-    target, compiled = compile_source(src_path, None, target=target)
+    target, compiled = compile_source(src_path, None, target=target, stores=stores)
     by_name = {info["name"]: info for info in compiled}
     by_sym = {info["symbol"]: info for info in compiled}
     if fn_name is None:
@@ -848,7 +848,7 @@ def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False
         with open(src_path, "r", encoding="utf-8") as f:
             raw_src = f.read()
         if ode_unified.is_unified(raw_src):
-            parsed = ode_unified.parse_unified(raw_src, src_path)
+            parsed = ode_unified.parse_unified(raw_src, src_path, stores=stores)
             fn_rec = parsed["fns_by_name"].get(top["name"])
             if fn_rec is not None:
                 im = ode_unified._select_impl(fn_rec, target, src_path)
@@ -897,9 +897,9 @@ def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False
         }
 
 
-def run_refute(src_path, spec_path, fn_names=None, cases=16, seed=1, includes=None):
+def run_refute(src_path, spec_path, fn_names=None, cases=16, seed=1, includes=None, stores=()):
     """Compile and run table-driven concrete counterexample probes (no Lean needed)."""
-    target, compiled = compile_source(src_path, fn_names)
+    target, compiled = compile_source(src_path, fn_names, stores=stores)
     spec_text = load_spec_text(spec_path, includes)
     with tempfile.TemporaryDirectory() as td:
         progs = {}
@@ -918,6 +918,7 @@ def run_refute(src_path, spec_path, fn_names=None, cases=16, seed=1, includes=No
 
 
 def _add_common_flags(p):
+    p.add_argument("--store", "-S", action="append", default=[], help="directory to search for content-addressed `use` modules (repeatable)")
     p.add_argument("--include", action="append", default=[], help="additional .spec file(s) prepended before spec (repeatable)")
     p.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
     p.add_argument("--arch", choices=sorted(estimate.ARCHS), default=None, help="microarchitecture profile")
@@ -955,18 +956,20 @@ def handle_request(req):
             res = run_check(req["source"], req["spec"], fn_names=req.get("fn"), out_dir=req.get("out"),
                             arch=req.get("arch"), do_trace=bool(req.get("trace", False)),
                             align=int(req.get("align", 0)), arg_overrides=req.get("args") or None,
-                            budgets=req.get("budgets") or None, includes=req.get("include") or None)
+                            budgets=req.get("budgets") or None, includes=req.get("include") or None,
+                            stores=req.get("store") or ())
             return {"ok": res["verdict"] == "shown" and not res.get("budget_errors"), "result": _json_safe(res)}
         if cmd == "advise":
             res = run_advise(req["source"], fn_name=req.get("fn"), spec_path=req.get("spec"),
                              arch=req.get("arch"), do_trace=bool(req.get("trace", False)),
                              align=int(req.get("align", 0)), arg_overrides=req.get("args") or None,
-                             budgets=req.get("budgets") or None, includes=req.get("include") or None)
+                             budgets=req.get("budgets") or None, includes=req.get("include") or None,
+                             stores=req.get("store") or ())
             return {"ok": not res.get("budget_errors"), "result": _json_safe(res)}
         if cmd == "refute":
             target, res = run_refute(req["source"], req["spec"], fn_names=req.get("fn"),
                                      cases=int(req.get("cases", 16)), seed=int(req.get("seed", 1)),
-                                     includes=req.get("include") or None)
+                                     includes=req.get("include") or None, stores=req.get("store") or ())
             any_false = any(v["status"] == "FALSE" for v in res.values())
             return {"ok": not any_false, "target": target, "results": _json_safe(res)}
         return {"ok": False, "error": f"unknown cmd: {cmd!r}"}
@@ -1011,6 +1014,7 @@ def main(argv=None):
     p_ref = sub.add_parser("refute", help="run concrete counterexample probes via core/conc.py (no Lean)")
     p_ref.add_argument("source", help=".ode source file")
     p_ref.add_argument("spec", help=".spec contract file")
+    p_ref.add_argument("--store", "-S", action="append", default=[], help="directory to search for content-addressed `use` modules (repeatable)")
     p_ref.add_argument("--include", action="append", default=[], help="additional .spec file(s) prepended before spec")
     p_ref.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
     p_ref.add_argument("--fn", action="append", default=None, help="function name(s) in source (default: all)")
@@ -1019,10 +1023,14 @@ def main(argv=None):
 
     sub.add_parser("serve", help="persistent JSON-lines worker on stdin/stdout (keeps tables and Python warm)")
 
+    p_hsh = sub.add_parser("hash", help="print the 52-char lowercase base-32 BLAKE3-256 module digest of .ode file(s)")
+    p_hsh.add_argument("files", nargs="+", help=".ode module file(s) to hash")
+
     p_can = sub.add_parser("canon", help="extract/canonicalize a contract to nameless .ocl and print its 52-char BLAKE3 ID")
     p_can.add_argument("spec", help="unified .ode source file, or .ocl/.spec contract file")
     p_can.add_argument("--contract", "--fn", dest="contract", default=None, help="function/contract name (required if file defines multiple)")
     p_can.add_argument("--target", default=None, help="target architecture (x86_64, arm64) for multi-target .ode")
+    p_can.add_argument("--store", "-S", action="append", default=[], help="directory to search for content-addressed `use` modules (repeatable)")
     p_can.add_argument("--out-dir", default=None, help="write hash-named <52-char-b32>.ocl file into this directory")
     p_can.add_argument("--glossary-out", default=None, help="write author-name glossary JSON to this path")
     p_can.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
@@ -1034,6 +1042,7 @@ def main(argv=None):
     p_pck.add_argument("--proof", required=True, help="output separate .proof file path")
     p_pck.add_argument("--fn", default=None, help="function name in source (default: last in source)")
     p_pck.add_argument("--target", default=None, help="target architecture (x86_64, arm64) for multi-target .ode")
+    p_pck.add_argument("--store", "-S", action="append", default=[], help="directory to search for content-addressed `use` modules (repeatable)")
     p_pck.add_argument("--c-abi", action="store_true", help="export the packed entry function with the C ABI for legacy C/Rust callers")
     p_pck.add_argument("--effort", choices=("fast", "deep"), default=None, help="prover search effort: `fast` (quick interactive stop) or `deep` (try harder on the same source)")
     p_pck.add_argument("--try-harder", action="store_true", help="shorthand for `--effort deep` (retry proving the same source with deep search effort)")
@@ -1054,6 +1063,7 @@ def main(argv=None):
     p_st.add_argument("spec", help=".ocl or .spec contract file")
     p_st.add_argument("--call", required=True, help="definition name (canonical e.g. f0, or glossary name with --glossary)")
     p_st.add_argument("--arg", action="append", default=[], help="JSON-encoded argument (repeat for each parameter)")
+    p_st.add_argument("--store", "-S", action="append", default=[], help="directory to search for content-addressed `use` modules (repeatable)")
     p_st.add_argument("--glossary", default=None, help="optional glossary JSON mapping canonical names to human names")
 
     args = ap.parse_args(argv)
@@ -1075,10 +1085,16 @@ def main(argv=None):
     overrides = parse_arg_overrides(getattr(args, "arg", None)) if args.cmd in ("check", "advise", "compare") else {}
     budgets = parse_budgets(args) if args.cmd in ("check", "advise", "compare") else {}
 
+    if args.cmd == "hash":
+        import ode_unified
+        for fp in args.files:
+            print(f"{ode_unified.module_hash_file(fp)}  {fp}")
+        return 0
+
     if args.cmd == "check":
         res = run_check(args.source, args.spec, fn_names=args.fn, out_dir=args.out, arch=args.arch,
                         do_trace=args.trace, align=args.align, arg_overrides=overrides,
-                        budgets=budgets, includes=args.include, target=args.target)
+                        budgets=budgets, includes=args.include, target=args.target, stores=args.store)
         if args.json:
             print(json.dumps(_json_safe(res)))
             if res["verdict"] != "shown": return 1
@@ -1100,7 +1116,7 @@ def main(argv=None):
         res = run_advise(args.source, fn_name=args.fn, spec_path=args.spec, arch=args.arch,
                          do_trace=args.trace, align=args.align, arg_overrides=overrides,
                          budgets=budgets, includes=args.include, target=args.target,
-                         all_archs=args.all_archs, show_asm=args.asm)
+                         all_archs=args.all_archs, show_asm=args.asm, stores=args.store)
         if args.json:
             print(json.dumps(_json_safe(res)))
             return 2 if res["budget_errors"] else 0
@@ -1114,9 +1130,9 @@ def main(argv=None):
     if args.cmd == "compare":
         if args.spec:
             ra = run_check(args.source_a, args.spec, fn_names=[args.fn] if args.fn else None, arch=args.arch,
-                           do_trace=args.trace, align=args.align, arg_overrides=overrides, includes=args.include)
+                           do_trace=args.trace, align=args.align, arg_overrides=overrides, includes=args.include, stores=args.store)
             rb = run_check(args.source_b, args.spec, fn_names=[args.fn] if args.fn else None, arch=args.arch,
-                           do_trace=args.trace, align=args.align, arg_overrides=overrides, includes=args.include)
+                           do_trace=args.trace, align=args.align, arg_overrides=overrides, includes=args.include, stores=args.store)
             if args.json:
                 print(json.dumps(_json_safe({"a": ra, "b": rb})))
                 return 0 if (ra["verdict"] == "shown" and rb["verdict"] == "shown") else 1
@@ -1129,9 +1145,9 @@ def main(argv=None):
                                            os.path.basename(args.source_b), rb["static"], rb["memory"]))
             return 0
         ra = run_advise(args.source_a, fn_name=args.fn, arch=args.arch, do_trace=args.trace,
-                        align=args.align, arg_overrides=overrides, includes=args.include)
+                        align=args.align, arg_overrides=overrides, includes=args.include, stores=args.store)
         rb = run_advise(args.source_b, fn_name=args.fn, arch=args.arch, do_trace=args.trace,
-                        align=args.align, arg_overrides=overrides, includes=args.include)
+                        align=args.align, arg_overrides=overrides, includes=args.include, stores=args.store)
         if args.json:
             print(json.dumps(_json_safe({"a": ra, "b": rb})))
             return 0
@@ -1141,7 +1157,7 @@ def main(argv=None):
 
     if args.cmd == "refute":
         target, results = run_refute(args.source, args.spec, fn_names=args.fn, cases=args.cases,
-                                     seed=args.seed, includes=args.include)
+                                     seed=args.seed, includes=args.include, stores=args.store)
         any_false = any(res["status"] == "FALSE" for res in results.values())
         if args.json:
             print(json.dumps(_json_safe({"target": target, "results": results})))
@@ -1152,7 +1168,7 @@ def main(argv=None):
 
     if args.cmd == "canon":
         import ode_canon
-        res = ode_canon.canonicalize_file(args.spec, contract_name=args.contract, target=args.target)
+        res = ode_canon.canonicalize_file(args.spec, contract_name=args.contract, target=args.target, stores=args.store)
         out_path = None
         if args.out_dir:
             os.makedirs(args.out_dir, exist_ok=True)
@@ -1192,7 +1208,7 @@ def main(argv=None):
             res = ode_audit.pack_verified(
                 args.source, args.spec, args.out, args.proof,
                 fn_name=args.fn, target=args.target, glossary_out=args.glossary_out, includes=args.include,
-                c_abi=args.c_abi,
+                c_abi=args.c_abi, stores=args.store,
             )
         except ode_audit.PackProofError as exc:
             by_sym = {exc.fn_sym: exc.info} if (exc.fn_sym and exc.info) else {}
@@ -1250,7 +1266,7 @@ def main(argv=None):
 
     if args.cmd == "spec-test":
         import ode_audit
-        val = ode_audit.run_spec_test(args.spec, args.call, args.arg, glossary_path=args.glossary)
+        val = ode_audit.run_spec_test(args.spec, args.call, args.arg, glossary_path=args.glossary, stores=args.store)
         print(json.dumps(val))
         return 0
 

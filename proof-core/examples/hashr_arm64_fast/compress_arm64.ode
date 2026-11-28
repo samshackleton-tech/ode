@@ -1,5 +1,5 @@
 // One-block BLAKE3 compression for AArch64 NEON (unified `.ode` with linked local namespace).
-use b3 = "blake3_spec.ode"
+use b3 = "ya6gqve7vxwsty67gvln6hr4lxkvo2vmknwk4l3prxrvtmuetiqq"  // blake3_spec.ode
 
 // BLAKE3 one-block NEON compression kernel on AArch64, written in higher-level Ode.
 // Verified in Lean 4 directly against kcheck/blake3.spec's `compress(h, m, t, length, flags)`:

@@ -7,6 +7,6 @@
   "expected_contract_id": "hbdtlkirrxt4sxhwsvqn3rmrrqxxfx3rpu4iebfgdgb3my2cr7ma",
   "native_harness": "paper/EXPERIMENTS/tasks/ct_count_native.c",
   "reference_solution": "paper/EXPERIMENTS/tasks/ct_count_reference.ode",
-  "contract_header": "use cd = \"ct_count_spec.ode\"\n\nfn ct_count_diff(a: n bytes, b: n bytes, n: number)\n    requires n < 4294967296\n    returns cd.count_diff(a, b)\n    trace depends on n\n    stack 0\n",
+  "contract_header": "use cd = \"4nm36ybvfelwgkhw5up5nrtlzifjqmrgtkwzyype6baecjysqgda\"  // ct_count_spec.ode\n\nfn ct_count_diff(a: n bytes, b: n bytes, n: number)\n    requires n < 4294967296\n    returns cd.count_diff(a, b)\n    trace depends on n\n    stack 0\n",
   "task_summary": "Implement and verify `ct_count_diff`: it returns the number of places at which the two runs of `n` bytes differ, and its execution trace may depend on the length `n` alone (never on the bytes of `a` or `b`)."
 }

@@ -32,11 +32,19 @@ def parts(line):
     return mn, [o.strip() for o in rest.split(",")] if rest.strip() else []
 
 
+STORES = (
+    str(ROOT / "proof-core" / "examples" / "hashr_arm64_fast"),
+    str(ROOT / "proof-core" / "examples" / "ebpf"),
+    str(ROOT / "proof-core" / "examples" / "hasher"),
+    str(ROOT / "std"),
+)
+
+
 def iter_ode_targets(path):
     """Yield `(target, fns)` for every architecture implemented in `path` (skips spec-only `.ode` files)."""
     text = path.read_text()
     try:
-        target, _, _, fns = odec.source(text, str(path))
+        target, _, _, fns = odec.source(text, str(path), stores=STORES)
         if fns:
             yield target, fns
         return
@@ -46,7 +54,7 @@ def iter_ode_targets(path):
             return
     for tgt in ("arm64", "x86_64"):
         try:
-            target, _, _, fns = odec.source(text, str(path), target=tgt)
+            target, _, _, fns = odec.source(text, str(path), target=tgt, stores=STORES)
             if fns:
                 yield target, fns
         except Exception:
@@ -62,7 +70,7 @@ def shapes():
         for target, fns in iter_ode_targets(path):
             if target != "x86_64": continue
             for name, _, _, _ in fns:
-                for x in odec.instructions(text, name, str(path), target=target):
+                for x in odec.instructions(text, name, str(path), target=target, stores=STORES):
                     if x.endswith(":") or x.startswith("."): continue
                     mn, ops = parts(x)
                     seen.setdefault((mn,) + tuple(asm.operand(o) + ("rip" in o, o.count("+") > 1) for o in ops), x)
@@ -133,10 +141,10 @@ class Assembler(unittest.TestCase):
                 for target, fns in iter_ode_targets(path):
                     for name, sym, _, _ in fns:
                         count += 1
-                        with self.subTest(source=path.relative_to(ROOT), target=target, function=name):
-                            source.write_text(odec.assembly(str(path), name, target=target))
+                        with self.subTest(source=str(path.relative_to(ROOT)), target=target, function=name):
+                            source.write_text(odec.assembly(str(path), name, target=target, stores=STORES))
                             odec.assemble(str(source), str(clang), target=target)
-                            odec.build(str(path), name, str(own), target=target)
+                            odec.build(str(path), name, str(own), target=target, stores=STORES)
                             if target == "arm64":
                                 norm = lambda rows: [(a, b, ".b 0x0" if txt == f".b {sym}" else txt) for a, b, txt in rows]
                                 own_rows = norm(aobj.read(str(own), sym))

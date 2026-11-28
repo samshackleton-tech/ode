@@ -1,7 +1,7 @@
 // Fast single-threaded BLAKE3 for AArch64 (100% unified `.ode` with linked local namespaces).
-use b3 = "blake3_spec.ode"
-use comp = "compress_arm64.ode"
-use w4 = "wide4_fast_arm64.ode"
+use b3 = "ya6gqve7vxwsty67gvln6hr4lxkvo2vmknwk4l3prxrvtmuetiqq"  // blake3_spec.ode
+use comp = "r74eijstebwgwmyayvlwv4k6lxhlgv6oglwzoyuzroavfkg4b7yq"  // compress_arm64.ode
+use w4 = "au4svjwltgd7zyswomokcww5lhx7lhqivahw3ruqbagokb2s2qbq"  // wide4_fast_arm64.ode
 
 fn pad_fast(block: 64 bytes, src: n bytes, n: number)
     requires no_overlap(block, src)

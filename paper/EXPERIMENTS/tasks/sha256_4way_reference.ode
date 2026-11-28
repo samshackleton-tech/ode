@@ -1,4 +1,4 @@
-use spec = "sha256_4way_spec.ode"
+use spec = "wcnemo3me6sc6h3bhpmf643xiljll7sxguyi3eyguff6p36gx6yq"  // sha256_4way_spec.ode
 
 fn sha256_4way(out: 128 bytes, state: 128 bytes, blocks: 256 bytes, k: 256 bytes)
     requires no_overlap(out, state, blocks, k)

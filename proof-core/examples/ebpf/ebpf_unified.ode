@@ -1,6 +1,6 @@
 // Verified pure-computation RFC 9669 eBPF virtual machine (x86-64 & AArch64).
 // Uses custom-calling `stack 0` helpers to keep symbolic paths additive on both targets.
-use bpf = "ebpf_spec.ode"
+use bpf = "we6mimwdznekdsel5i5svepltsryti4loss5dsuxdu7mrc4hbodq"  // ebpf_spec.ode
 
 fn get_reg_fn(idx: number, r0: number, r1: number, r2: number, r3: number)
     requires idx < 4

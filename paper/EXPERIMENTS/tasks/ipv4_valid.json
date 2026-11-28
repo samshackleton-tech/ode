@@ -8,7 +8,7 @@
   "reference_solution": "paper/EXPERIMENTS/tasks/ipv4_valid_reference.ode",
   "native_harness": "paper/EXPERIMENTS/tasks/ipv4_valid_native.c",
   "input_bytes_per_call": 20,
-  "contract_header": "use spec = \"ipv4_valid_spec.ode\"\n\nfn ipv4_valid(pkt: n bytes, n: number)\n    requires n <= 65535\n    returns spec.ipv4_valid(pkt)\n    trace depends on pkt, n\n    stack 0\n",
+  "contract_header": "use spec = \"vq5izfremyqughwylrwyy6oa7dzomjky6jpn7hpdsr75lm6flkna\"  // ipv4_valid_spec.ode\n\nfn ipv4_valid(pkt: n bytes, n: number)\n    requires n <= 65535\n    returns spec.ipv4_valid(pkt)\n    trace depends on pkt, n\n    stack 0\n",
   "task_summary": "Implement `ipv4_valid(pkt, n)`, an RFC 791 IPv4 packet header validator with RFC 1071 one's-complement header checksum verification. Return `1` iff `n >= 20`, version `pkt[0] / 16 == 4`, `ihl = pkt[0] % 16 >= 5`, `4 * ihl <= n`, total length `pkt[2] * 256 + pkt[3]` satisfies `4 * ihl <= total_length <= n`, and folding the sum of all `2 * ihl` big-endian 16-bit halfwords in `pkt[0 .. 4*ihl)` twice with end-around carry equals `65535` (`0xFFFF`). Return `0` otherwise. Your goal is BOTH full verification (`shown`) AND maximum packet-validation throughput (lowest cycles per packet for standard 20-byte `ihl == 5` headers and option headers `5 < ihl <= 15`).",
   "opt_goal": "reduce total cycles per IPv4 header validation (e.g., via a specialized zero-loop unrolled 20-byte `ihl == 5` fast path with parallel reduction tree, unrolling the general loop, or wide/branch-reduced header checks) while keeping `ode pack`, `ode audit`, `verify2.py`, and native tests passing"
 }

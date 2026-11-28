@@ -1,5 +1,5 @@
 // How many bytes of two runs differ; the trace depends on the length alone.
-use cd = "ct_count_spec.ode"
+use cd = "4nm36ybvfelwgkhw5up5nrtlzifjqmrgtkwzyype6baecjysqgda"  // ct_count_spec.ode
 
 fn ct_count_diff(a: n bytes, b: n bytes, n: number)
     requires n < 4294967296

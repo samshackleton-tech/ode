@@ -17,7 +17,7 @@ Ode is built for **Bob**, the skeptical auditor. Bob reads a short declarative c
 
 ## How Verification Works
 
-1. **One source format (`.ode`).** Specifications (`const`, `def`, `layout`) and machine-code implementations (`for x86_64`, `for arm64`) live in `.ode` files connected by explicit linked local namespaces (`use alias = "file.ode"`).
+1. **One source format (`.ode`).** Specifications (`const`, `def`, `layout`) and machine-code implementations (`for x86_64`, `for arm64`) live in `.ode` files connected by content-addressed linked local namespaces (`use alias = "<52-char-blake3-256>"`).
 2. **Nameless, content-defined contracts.** Canonicalizing a contract strips all chosen names and hashes the resulting text with BLAKE3-256 to a 52-character lowercase base-32 identifier (`ode_<52>`). The same contract produces the exact same identifier on x86-64 and AArch64.
 3. **Separate proof-carrying artifacts.** `ode pack` produces a standard ELF64 object file (`.o`, with the canonical contract embedded in `.ode.ocl`) and a separate `.proof` file whose arithmetic refutation steps carry explicit rows (`r ...`), independent of any verifier's internal fact order.
 4. **Two independent verifiers.**

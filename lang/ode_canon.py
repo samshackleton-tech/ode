@@ -795,13 +795,13 @@ def canonicalize(spec_text, contract_name=None):
     }
 
 
-def canonicalize_ode(ode_text, fn_name=None, target=None, src="<ode>"):
+def canonicalize_ode(ode_text, fn_name=None, target=None, src="<ode>", stores=()):
     """Extract and canonicalize one function's semantic `.ocl` contract from a unified `.ode` file.
 
     Custom `calling { ... }` blocks stay strictly in `.ode` and never enter the `.ocl` contract.
     """
     import ode_unified
-    parsed = ode_unified.parse_unified(ode_text, src=src)
+    parsed = ode_unified.parse_unified(ode_text, src=src, stores=stores)
     if fn_name is None:
         root_fns = parsed.get("root_fns", parsed["fns"])
         if len(root_fns) != 1:
@@ -818,13 +818,13 @@ def canonicalize_ode(ode_text, fn_name=None, target=None, src="<ode>"):
     return res
 
 
-def canonicalize_file(path, contract_name=None, target=None):
+def canonicalize_file(path, contract_name=None, target=None, stores=()):
     """Canonicalize either a unified `.ode` file or an `.ocl`/`.spec` file, checking hash filenames."""
     import ode_unified
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
     if ode_unified.is_unified(text):
-        res = canonicalize_ode(text, fn_name=contract_name, target=target, src=path)
+        res = canonicalize_ode(text, fn_name=contract_name, target=target, src=path, stores=stores)
     else:
         res = canonicalize(text, contract_name=contract_name)
         check_ocl_filename(path, res["contract_id"])

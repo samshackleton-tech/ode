@@ -1,4 +1,4 @@
-use spec = "ct_lt_spec.ode"
+use spec = "dgq3l4gvriw55as3gylubcaxotdgyg2wfanwfra72ri3doo5ayva"  // ct_lt_spec.ode
 
 fn ct_bytes_lt(a: n bytes, b: n bytes, n: number)
     requires n < 1000000000

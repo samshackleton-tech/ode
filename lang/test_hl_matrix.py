@@ -423,40 +423,41 @@ fn caller(x: u64) -> u64
         """Differential + metamorphic test covering BOTH Bug #1 (`verify2.py` tail-call multi-open)
         and Bug #2 (`prove.py` multi-step unroll `t same` + Gomory cut `(69 % 16) * 2 == 10`)."""
         spec_txt = (Path(ROOT) / "paper/EXPERIMENTS/tasks/ipv4_valid_spec.ode").read_text(encoding="utf-8")
+        h_ipv4 = ode_unified.module_hash_bytes(spec_txt.encode("utf-8"))
         # 1. Tail-call multi-open (exact shape of muse-spark-open arm64 ipv4_valid!)
-        src_tail = """\
-use spec = "ipv4_valid_spec.ode"
+        src_tail = f"""\
+use spec = "{h_ipv4}"  // ipv4_valid_spec.ode
 
 fn fold_ok(s: u64) -> u64
     returns spec.fold2_ok(s)
     trace depends on s
     stack 0
-{
+{{
     let t1 := s % 65536 + s / 65536
     let t2 := t1 % 65536 + t1 / 65536
     return select(t2 == 65535, 1, 0)
-}
+}}
 
 fn checksum4_tail(pkt: n bytes, n: number) -> u64
     requires n <= 65535, n >= 8
     returns spec.sum16_check(pkt, 0, 4, 0)
     trace depends on pkt, n
     stack 0
-{
+{{
     var acc: u64 := 0
-    for k in 0..4 unroll {
+    for k in 0..4 unroll {{
         acc += pkt[2 * k] * 256 + pkt[2 * k + 1]
-    }
+    }}
     return fold_ok(acc)
-}
+}}
 """
         for arch in ("x86_64", "arm64"):
             _pack_and_dual_verify(src_tail, "checksum4_tail", arch,
                                   extra_files={"ipv4_valid_spec.ode": spec_txt}, check_v2=True)
 
         # 2. Metamorphic 4-step unroll with mid-function `join maintains` + Gomory `(69 % 16) * 2 == 10`
-        src_unroll = """\
-use spec = "ipv4_valid_spec.ode"
+        src_unroll = ("""\
+use spec = "__H_IPV4__"  // ipv4_valid_spec.ode
 
 def sum4_spec(pkt) {
     if pkt[0] != 69 then 0
@@ -486,7 +487,7 @@ fn sum4_unroll_join(pkt: n bytes, n: number) -> u64
     let f2 := (f1 & 65535) + (f1 >> 16)
     return select(f2 == 65535, 1, 0)
 }
-"""
+""").replace("__H_IPV4__", h_ipv4)
         for arch in ("x86_64", "arm64"):
             _pack_and_dual_verify(src_unroll, "sum4_unroll_join", arch,
                                   extra_files={"ipv4_valid_spec.ode": spec_txt}, check_v2=True)
@@ -920,19 +921,20 @@ fn blowup(out: 64 bytes, src: n bytes, n: number)
             spec_p = os.path.join(td, "helper_spec.ode")
             with open(spec_p, "w", encoding="utf-8") as f:
                 f.write("def u16_le(b, i) { b[i] + 256 * b[i + 1] }\n")
+            h_sp = ode_unified.module_hash_file(spec_p)
             main_p = os.path.join(td, "main.ode")
             with open(main_p, "w", encoding="utf-8") as f:
-                f.write("""\
-use sp = "helper_spec.ode"
+                f.write(f"""\
+use sp = "{h_sp}"  // helper_spec.ode
 
 fn f(buf: n bytes, n: number)
     requires n >= 2
     returns sp.u16_le(buf, 0)
     trace depends on n
     stack 0
-{
+{{
     return sp.u16_le(buf, 0)
-}
+}}
 """)
             r = subprocess.run(
                 [sys.executable, os.path.join(ROOT, "lang", "ode_tool.py"),

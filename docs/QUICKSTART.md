@@ -114,7 +114,7 @@ In Ode, the **trace** of an execution is the sequence of instruction addresses e
 - `trace depends on n` permits branches and memory addresses to depend only on `n`, never on any byte in memory.
 - `trace depends on a, n` permits dependence on both `n` and the bytes of `a`.
 
-Import another `.ode` file under a closed local alias with `use alias = "file.ode"` and refer to its definitions or functions as `alias.name`. Below is a complete constant-time byte-slice comparison using `select` so no branch ever depends on input bytes:
+Import another `.ode` file under a closed local alias using its 52-character lowercase base-32 BLAKE3-256 digest (`ode hash eq_spec.ode`) and refer to its definitions or functions as `alias.name`. Below is a complete constant-time byte-slice comparison using `select` so no branch ever depends on input bytes:
 
 ```ode
 // eq_spec.ode
@@ -126,8 +126,8 @@ def ct_bytes_eq(a, b) { eq_from(a, b, 0, 0) }
 ```
 
 ```ode
-// eq.ode
-use eq = "eq_spec.ode"
+// eq.ode  (run `ode hash eq_spec.ode` to obtain the 52-character digest)
+use eq = "<52-char-blake3-256-of-eq_spec.ode>"
 
 fn ct_bytes_eq(a: n bytes, b: n bytes, n: number)
     returns eq.ct_bytes_eq(a, b)

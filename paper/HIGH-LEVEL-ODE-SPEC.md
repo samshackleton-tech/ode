@@ -27,14 +27,14 @@ The table below lists every value type in High-Level Ode; each row gives the typ
 
 ## 3. Complete Grammar (EBNF)
 
-Specifications (`def`), imports (`use alias = "file.ode"`), and function contracts (`requires`, `ensures`, `returns`, `trace depends on`, `stack`) keep Ode's existing syntax, adding only linear stack bounds `stack C + D * param`.
+Specifications (`def`), content-addressed imports (`use alias = "<52-char-blake3-256>"`), and function contracts (`requires`, `ensures`, `returns`, `trace depends on`, `stack`) keep Ode's existing syntax, adding only linear stack bounds `stack C + D * param`.
 
 ```ebnf
 file      := (use_decl | def_decl | fn_decl)*
 
-fn_decl   := "fn" ident "(" params ")" ["->" type] contract_clause*
+fn_decl   := ["inline"] "fn" ident "(" params ")" ["->" type] contract_clause*
              ( block | target_block+ )
-target_block := "for" ("x86_64" | "arm64") ["needs" "avx"] block
+target_block := "for" ("x86_64" | "arm64") [":" variant] ["needs" ident] block
 
 block     := "{" stmt* "}"
 
@@ -114,7 +114,7 @@ The table below gives the fixed instruction lowering of each High-Level Ode cons
 ### Example A: Constant-Time Base64 Decoder (`ct_base64_decode` — 1 portable file, both CPUs)
 
 ```ode
-use spec = "ct_base64_decode_spec.ode"
+use spec = "<52-char-blake3-256-of-ct_base64_decode_spec.ode>"
 
 fn b64_dec(c: u8) -> u64
     returns spec.b64_dec(c)

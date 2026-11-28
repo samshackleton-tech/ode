@@ -1,4 +1,4 @@
-use spec = "ipv4_valid_spec.ode"
+use spec = "vq5izfremyqughwylrwyy6oa7dzomjky6jpn7hpdsr75lm6flkna"  // ipv4_valid_spec.ode
 
 // RFC 791 IPv4 packet header validator + RFC 1071 one's-complement header checksum.
 fn ipv4_valid(pkt: n bytes, n: number)

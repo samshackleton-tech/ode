@@ -1,4 +1,4 @@
-use spec = "json_str_valid_spec.ode"
+use spec = "5p2s6autx4gpak5n34fuom4egxjthz6l34sma2uko5hjwpw2dmta"  // json_str_valid_spec.ode
 
 // Check whether byte `c` is an ASCII hexadecimal digit ('0'-'9', 'A'-'F', 'a'-'f').
 fn chk_hex(c: number)

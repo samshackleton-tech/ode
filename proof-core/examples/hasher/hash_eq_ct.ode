@@ -1,5 +1,5 @@
 // Constant-time byte-slice equality (`stack 0`, `trace depends on n` only).
-use eq = "hash_eq_ct_spec.ode"
+use eq = "yhus24dbjyhcm7qaoeef2ryezipmeszgofacitqnywda6uqpypdq"  // hash_eq_ct_spec.ode
 
 fn ct_bytes_eq(a: n bytes, b: n bytes, n: number)
     returns eq.ct_bytes_eq(a, b)

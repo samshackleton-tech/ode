@@ -1,4 +1,4 @@
-use spec = "utf8_valid_spec.ode"
+use spec = "e2alztpsinfciojsntay3as2yanhiy7ppbmf2xhbidbxtvnnbava"  // utf8_valid_spec.ode
 
 fn utf8_valid(src: n bytes, n: number)
     requires n <= 4096

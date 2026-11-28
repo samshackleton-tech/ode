@@ -225,7 +225,7 @@ Unlike `all_zero` (which may stop on the first nonzero byte), a cryptographic ta
 
 By default—when `trace depends on` is omitted, or written `trace depends on nothing`—no input value or buffer byte may influence any branch or memory address. Naming `trace depends on n` permits dependence on the length `n` only, while `trace depends on a, n` also permits dependence on the bytes of `a`.
 
-To keep a pure specification separate from its implementations, import another `.ode` file under a local alias with `use alias = "file.ode"` and qualify its definitions as `alias.name`. Below is a complete constant-time byte-slice comparison split across two files, together with its verified AArch64 machine-code loop.
+To keep a pure specification separate from its implementations, import another `.ode` file under a local alias by its 52-character BLAKE3-256 digest (`use alias = "<52-char-digest>"`, obtained via `ode hash <file.ode>`) and qualify its definitions as `alias.name`. Below is a complete constant-time byte-slice comparison split across two files, together with its verified AArch64 machine-code loop.
 
 #codebox("proof-core/examples/hasher/hash_eq_ct_spec.ode — shared specification", heq_spec, span: 6.80in)
 
