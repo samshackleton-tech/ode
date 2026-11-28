@@ -1717,7 +1717,18 @@ def _linear_to_spec(e):
 
 def _cmp_to_fact(c, bytes_params=()):
     """Convert a linear `Cmp` into `(fact_str, vars_used)` for `place` inheritance, or None."""
-    if not isinstance(c, Cmp) or c.op == "!=":
+    if not isinstance(c, Cmp):
+        return None
+    if c.op == "!=":
+        # Every HL `Var`/`IndexLoad` is unsigned (`>= 0`), so `x != 0` implies `1 <= x`.
+        if isinstance(c.right, Num) and c.right.val == 0 and isinstance(c.left, (Var, IndexLoad)):
+            l = _pure_to_spec(c.left, bytes_params)
+            if l is not None:
+                return f"1 <= {l[0]}", l[1]
+        if isinstance(c.left, Num) and c.left.val == 0 and isinstance(c.right, (Var, IndexLoad)):
+            r = _pure_to_spec(c.right, bytes_params)
+            if r is not None:
+                return f"1 <= {r[0]}", r[1]
         return None
     l = _pure_to_spec(c.left, bytes_params)
     r = _pure_to_spec(c.right, bytes_params)

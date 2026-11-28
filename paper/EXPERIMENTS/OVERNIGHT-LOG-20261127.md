@@ -231,9 +231,18 @@ Full diagnosis of all 42 failed cells (`25 x86_64`, `17 arm64`) showed that **18
 
 ---
 
-## Iteration 8 — Pre-Registered 4-Model Suite (`hl-default-v8`)
+## Iteration 8 — Pre-Registered 4-Model Suite (`hl-default-v8`, commit `be34ab8`)
 
 - **Suite definition:** [`suites/hl-default-v8.json`](suites/hl-default-v8.json) — exact same 4 models × 8 tasks × 2 targets = **64 cells**, `opt_rounds: 0`, `max_rounds: 7`, `max_tokens: 16384`.
+- **Pre-registration:** [`prereg-hl-default-v8.md`](prereg-hl-default-v8.md).
+- **Results:** [`results-hl-default-v8.md`](results-hl-default-v8.md), [`results-hl-default-v8.json`](results-hl-default-v8.json).
+- **Headline:** **22 / 64 (34.4%)** strict passes (`x86_64 = 8/32`, `arm64 = 14/32`), **22 / 22** real-silicon native pass, **13 / 13** scalar `verify2.py` pass, **0** Python tracebacks, **9.5 min** wall clock (`572.1 s`), **$12.53** API spend, tool latency **p50 0.62 s / p90 2.41 s / max 29.17 s**.
+  - **Direct validation of `v7` fixes:** **`der_valid` jumped `2/8 -> 5/8`** with a new all-time `der_valid x86_64` record (**2/4**: `kimi-k3.1-pro` R5 and `muse-spark-open` R4, both `verify2=True`, `native=pass`).
+  - **By model:** `kimi-k3.1-pro` **8/16 (50.0% — new all-time model record!)** (`x86=3/8`, `arm=5/8`, `$6.36`), `muse-spark-open` **6/16** (tied all-time high, `x86=2/8`, `arm=4/8`, `$2.13`), `claude-haiku-5.5` **4/16** (`x86=1/8`, `arm=3/8`, `$0.56`), `glm-5.3-prime` **4/16** (`x86=2/8`, `arm=2/8`, `$3.48`).
+  - **By task (`x86_64` / `arm64`):** `ipv4_valid` 7/8 (4/3), `chacha20_4way` 5/8 (1/4, `arm64` 4/4), **`der_valid` 5/8** (2/3), `blake3_compress_4way` 2/8 (0/2), `ct_base64_decode` 1/8 (1/0), `sha256_4way` 1/8 (0/1), `blake3_compress1` 1/8 (0/1), `ebpf` 0/8 (0/0).
+  - **Single small fix:** Mapped unsigned `x != 0` / `0 != x` on `Var`/`IndexLoad` to `1 <= x` in `lang/ode_hl.py::_cmp_to_fact` so `while f != 0` preserves `f >= 1` across inner `join maintains` blocks.
+  - **Next architectural milestone:** Unified `[inline] fn` (with `-> ty`, `const` params, optional contracts with stricter call-site `requires` checks + auto-`join`, and `for <target>[:variant]` arms), pure content-addressed BLAKE3-256 `use` modules, and retiring Group B multi-instruction lowerings into ordinary `.ode` modules (see [`../PROPOSALS/unified-inline-and-b3-modules.md`](../PROPOSALS/unified-inline-and-b3-modules.md)).
+
 
 
 

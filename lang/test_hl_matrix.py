@@ -1512,6 +1512,37 @@ fn f_downstream(buf: n bytes, n: number, p: number, end: number)
             self.assertIn("need entail", cm_d.exception.reason)
             self.assertNotIn("need below", cm_d.exception.reason)
 
+        # Bug #4 (hl-default-v8): `while f != 0` records `1 <= f` in `active_facts` so inner `join maintains`
+        # preserves `f >= 1` for `f -= 1`.
+        src_neq_zero_loop = """\
+def count_down(n) {
+    n
+}
+
+fn f_neq_zero(n: number)
+    requires n < 1000
+    returns count_down(n)
+    trace depends on n
+    stack 0
+{
+    var f: u64 := n
+    var acc: u64 := 0
+    while f != 0
+        maintains acc + f == n
+        decreases f
+    {
+        var step: u64 := 0
+        if f > 1 { step := 1 } else { step := 1 }
+        join maintains step == 1
+        acc += step
+        f -= 1
+    }
+    return acc
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_neq_zero_loop, "f_neq_zero", arch, check_v2=True)
+
 
 if __name__ == "__main__":
     unittest.main()
