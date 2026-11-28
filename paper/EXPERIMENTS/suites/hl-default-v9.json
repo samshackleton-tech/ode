@@ -1,0 +1,30 @@
+{
+  "id": "hl-default-v9",
+  "description": "Iteration 9 cold-room benchmark (4 models x 8 tasks x 2 targets = 64 cells) after shipping Phases 1-4 of unified-inline-and-b3-modules: non-generalizing `check` primitive in Core.lean/SoundTop/verify2.py, unified `[inline] fn` (`-> ty`, `const` params, `for target[:variant]`, strict call-site `requires` check, auto-`join`, `stack(arch)`), pure content-addressed BLAKE3-256 `use` + `--store std`, ordinary `std/{vec,bytes,int}.ode` library, `EXPLICIT_MULTI_INSN_OPS = {}`, and `_cmp_to_fact` unsigned `!= 0 -> 1 <= x`.",
+  "models": [
+    "moonshotai/kimi-k3.1-pro",
+    "meta/muse-spark-open",
+    "z-ai/glm-5.3-prime",
+    "anthropic/claude-haiku-5.5"
+  ],
+  "tasks": [
+    "ct_base64_decode",
+    "der_valid",
+    "ipv4_valid",
+    "ebpf",
+    "chacha20_4way",
+    "sha256_4way",
+    "blake3_compress1",
+    "blake3_compress_4way"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "perf_arms": "ode",
+  "max_rounds": 7,
+  "opt_rounds": 0,
+  "max_truncations": 2,
+  "max_tokens": 16384,
+  "max_usd": 30
+}

@@ -436,7 +436,9 @@ def build_initial_user_prompt(task: dict, target: str) -> str:
         f"Return a single complete `.ode` file implementing `{task['entry_fn']}` "
         f"(either as a portable High-Level Ode body `{{ ... }}` when no target-specific "
         f"`needs` clause is required, or inside `{blk_hdr}`, plus any optional private "
-        f"helper `fn`s defined before `{task['entry_fn']}`).\n\n"
+        f"helper `fn`s or `inline fn`s defined before `{task['entry_fn']}`). "
+        f"The build harness already passes `--store std`, so you may import any `std/` "
+        f"module listed in `docs/QUICKSTART.md` directly by its 52-character BLAKE3-256 `use` digest.\n\n"
         f"---\n\n"
         f"## Complete Ode Quickstart (`docs/QUICKSTART.md`)\n\n{quickstart}\n\n"
         f"---\n\n"
@@ -1382,6 +1384,9 @@ def _ref_cache_key(task: dict, tgt: str) -> str:
     ]
     if task.get("native_harness"):
         paths.append(ROOT / task["native_harness"])
+    std_dir = ROOT / "std"
+    if std_dir.is_dir():
+        paths.extend(sorted(std_dir.glob("*.ode")))
     if ODEVERIFY.exists():
         paths.append(ODEVERIFY)
     parts = [f"{task['id']}|{tgt}|{expected_contract_id_for(task, tgt)}"]
@@ -1433,11 +1438,11 @@ def check_references(tasks: list[dict], targets: list[str], x86_exec_script: str
             out_o, out_p = td_p / "out.o", td_p / "out.proof"
             rc_p, txt_p, _ = run_tool([
                 ODE_PYTHON, str(ODE_TOOL), "pack", str(cand), "--c-abi", "--fn", task["entry_fn"],
-                "--target", tgt, "--out", str(out_o), "--proof", str(out_p)], td_p)
+                "--target", tgt, "--store", str(ROOT / "std"), "--out", str(out_o), "--proof", str(out_p)], td_p)
             if (rc_p != 0 or not out_o.exists()) and "TRY_HARDER" in txt_p:
                 rc_p, txt_p, _ = run_tool([
                     ODE_PYTHON, str(ODE_TOOL), "pack", str(cand), "--c-abi", "--try-harder", "--fn", task["entry_fn"],
-                    "--target", tgt, "--out", str(out_o), "--proof", str(out_p)], td_p)
+                    "--target", tgt, "--store", str(ROOT / "std"), "--out", str(out_o), "--proof", str(out_p)], td_p)
             if rc_p != 0 or not out_o.exists():
                 raise SystemExit(f"reference of task `{task['id']}` fails `ode pack` ({tgt}): {txt_p[-800:]}")
             rc_a, txt_a, _ = run_tool([
@@ -1579,6 +1584,10 @@ def main(argv=None) -> int:
         hashes[str(preset_path.relative_to(ROOT))] = blake3_hex(preset_path)
     if ODEVERIFY.exists():
         hashes["proof-core/.lake/build/bin/odeverify"] = blake3_hex(ODEVERIFY)
+    std_dir = ROOT / "std"
+    if std_dir.is_dir():
+        for sp in sorted(std_dir.glob("*.ode")):
+            hashes[str(sp.relative_to(ROOT))] = blake3_hex(sp)
     for t in tasks:
         hashes[t["spec_file"]] = blake3_hex(ROOT / t["spec_file"])
         if t.get("native_harness"):
