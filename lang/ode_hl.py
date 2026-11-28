@@ -2867,7 +2867,12 @@ class HLLower:
             push_bytes = 8 * len(self.callee_saved)
             need_align16 = self.uses_zmm or any(b[2] >= 16 for b in self.bufs)
             raw_frame = (off + 15) // 16 * 16 if (off > 0 and need_align16) else ((off + 7) // 8 * 8 if off > 0 else 0)
-            if self.has_calls and need_align16 and ((push_bytes + raw_frame + 8) % 16 != 0):
+            # System V entry pushes an 8-byte return address (`rsp % 16 == 8`): pad `raw_frame`
+            # by 8 bytes whenever 16-byte stack alignment is needed (both calls and leaf SIMD/bufs)
+            # so `rsp % 16 == 0` and 16B/64B stack accesses never straddle a 64B cache line.
+            if raw_frame > 0 and need_align16 and ((push_bytes + raw_frame + 8) % 16 != 0):
+                raw_frame += 8
+            elif self.has_calls and need_align16 and ((push_bytes + raw_frame + 8) % 16 != 0):
                 raw_frame += 8
             self.frame_bytes = raw_frame
             self.total_stack = push_bytes + raw_frame + (8 if self.has_calls else 0)

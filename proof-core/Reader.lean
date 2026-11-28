@@ -77,7 +77,7 @@ def vecOrFail (name : String) : Except String Nat :=
   | some r => if r < 32 then pure r else throw s!"no vector register {name}"
   | none => throw s!"no vector register {name}"
 
-def statementKinds : List String := ["fn", "machine", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "traceexpr", "resultdep", "argregs", "retreg", "keeps", "keepsvec", "data", "piece", "stack", "stackbits", "stacklin", "fndecreases", "linpre", "valspec", "def"]
+def statementKinds : List String := ["fn", "machine", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "align", "linedisjoint", "hidden", "traceexpr", "resultdep", "argregs", "retreg", "keeps", "keepsvec", "data", "piece", "stack", "stackbits", "stacklin", "fndecreases", "linpre", "valspec", "def"]
 
 /-- An instruction of a function that takes addresses in its file's read-only data says which file's
 (`pieceOf` reads it). (It stands after what the row's placeholders are, which are looked up far more often.) -/
@@ -185,6 +185,14 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | ["lanes", table, count] => onLast fun g => { g with contract := { g.contract with lanes := g.contract.lanes ++ [(table, count)] } }
   | ["atleast", name, n] => match n.toNat? with
     | some n => onLast fun g => { g with contract := { g.contract with atLeast := g.contract.atLeast ++ [(name, n)] } }
+    | none => throw s!"cannot read {line}"
+  | ["align", name, n] => match n.toNat? with
+    | some n => if n > 0 then onLast fun g => { g with contract := { g.contract with aligns := g.contract.aligns ++ [(name, n)] } }
+                else throw s!"cannot read {line}"
+    | none => throw s!"cannot read {line}"
+  | ["linedisjoint", a, b, n] => match n.toNat? with
+    | some n => if n > 0 then onLast fun g => { g with contract := { g.contract with lineDisjoint := g.contract.lineDisjoint ++ [(a, b, n)] } }
+                else throw s!"cannot read {line}"
     | none => throw s!"cannot read {line}"
   | ["hidden", name] => onLast fun g => { g with contract := { g.contract with hidden := g.contract.hidden ++ [name] } }
   | "traceexpr" :: _ => do

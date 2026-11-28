@@ -234,6 +234,8 @@ def parse_statement(path):
                     "requires": [],
                     "below": [],
                     "atleast": [],
+                    "aligns": [],
+                    "linedisjoint": [],
                     "linpre": [],
                     "returns": None,
                     "ensures": [],
@@ -259,6 +261,8 @@ def parse_statement(path):
                     cur["args"].append((parts[1], "bytes", parts[3]))
                 elif len(parts) == 4 and parts[2] == "out":
                     cur["args"].append((parts[1], "out", parts[3]))
+                elif len(parts) == 4 and parts[2] == "fixed":
+                    cur["args"].append((parts[1], "fixed", parts[3]))
                 else:
                     raise Refuse(f"unsupported arg form in verify2: {line}")
             elif kw == "ensures":
@@ -274,6 +278,16 @@ def parse_statement(path):
                 cur["below"].append((parts[1], int(parts[2])))
             elif kw == "atleast":
                 cur["atleast"].append((parts[1], int(parts[2])))
+            elif kw == "align":
+                al = int(parts[2])
+                if al <= 0:
+                    raise Refuse(f"malformed align line in verify2: {line}")
+                cur["aligns"].append((parts[1], al))
+            elif kw == "linedisjoint":
+                ln = int(parts[3])
+                if ln <= 0:
+                    raise Refuse(f"malformed linedisjoint line in verify2: {line}")
+                cur["linedisjoint"].append((parts[1], parts[2], ln))
             elif kw == "linpre":
                 # `linpre K a1 c1 a2 c2 ...`: the entry condition 0 <= K + c1*a1 + c2*a2 + ...
                 if len(parts) % 2 != 0:
@@ -881,6 +895,8 @@ class Verifier:
                 facts.append(r_sub(r_const(M64 + 1), r_add(buf_base[aname], buf_len[aname])))
             elif akind == "out":
                 facts.append(r_sub(r_const(M64 + 1), r_add(out_base[aname], r_const(int(alen)))))
+            elif akind in ("fixed", "inout"):
+                facts.append(r_sub(r_const(M64 + 1), r_add(env[aname], r_const(int(alen)))))
 
         if fn["decreases"] is not None:
             dnm = fn["decreases"]
@@ -1096,6 +1112,85 @@ class Verifier:
         for aname, bound in fn["atleast"]:
             if aname in env:
                 facts.append(r_sub(env[aname], r_const(bound)))
+        # Entry alignment moduli per variable index (mirrors Core.lean `isAligned`).
+        arg_to_reg = {aname: arg_regs[idx] for idx, (aname, _, _) in enumerate(fn["args"])}
+        align_vars = {}
+        for aname, al in fn["aligns"]:
+            if aname in arg_to_reg:
+                ev_row = entry_regs[arg_to_reg[aname]]
+                if ev_row[0] == 0 and len(ev_row[1]) >= 1 and ev_row[1][-1] == 1 and all(c == 0 for c in ev_row[1][:-1]):
+                    align_vars.setdefault(len(ev_row[1]) - 1, []).append(al)
+        if is_arm:
+            sp_row = entry_regs[sp_reg]
+            if sp_row[0] == 0 and len(sp_row[1]) >= 1 and sp_row[1][-1] == 1 and all(c == 0 for c in sp_row[1][:-1]):
+                align_vars.setdefault(len(sp_row[1]) - 1, []).append(16)
+
+        def _is_aligned(row, al):
+            if al <= 0 or (row[0] % al) != 0:
+                return False
+            for vi, ci in enumerate(row[1]):
+                if ci % al == 0:
+                    continue
+                if any(a0 > 0 and a0 % al == 0 for a0 in align_vars.get(vi, ())):
+                    continue
+                return False
+            return True
+
+        def _span_row(contract, c_regs, reg_map, nm):
+            reg_by_name = {a: c_regs[i] for i, (a, _, _) in enumerate(contract["args"])}
+            for i, (a, k, alen) in enumerate(contract["args"]):
+                if a == nm:
+                    r = c_regs[i]
+                    if k == "bytes":
+                        rl = reg_by_name.get(alen)
+                        return (reg_map[r], reg_map[rl]) if rl is not None else None
+                    if k in ("out", "fixed", "inout"):
+                        return (reg_map[r], r_const(int(alen)))
+                    return None
+            return None
+
+        def _check_call_align_ld(c, c_arg_regs, st):
+            c_reg_by_name = {a: c_arg_regs[i] for i, (a, _, _) in enumerate(c["args"])}
+            for x, al in c["aligns"]:
+                if al <= 0:
+                    continue
+                r = c_reg_by_name.get(x)
+                if r is not None and not _is_aligned(st["regs"][r], al):
+                    raise Refuse(f"argument `{x}` is not shown to be {al}-byte aligned")
+            for x, y, L in c["linedisjoint"]:
+                if L <= 0:
+                    continue
+                sx = _span_row(c, c_arg_regs, st["regs"], x)
+                sy = _span_row(c, c_arg_regs, st["regs"], y)
+                if sx is None or sy is None:
+                    if x in c_reg_by_name and y in c_reg_by_name:
+                        raise Refuse(f"arguments `{x}` and `{y}` have extents not handled for {L}-byte cache-line disjointness")
+                    continue
+                bx, lx = sx
+                by_, ly = sy
+                ok = (
+                    (not lx[1] and lx[0] == 0)
+                    or (not ly[1] and ly[0] == 0)
+                    or (_is_aligned(by_, L) and r_plain(st["facts"], r_sub(by_, r_add(bx, lx))))
+                    or (_is_aligned(bx, L) and r_plain(st["facts"], r_sub(bx, r_add(by_, ly))))
+                )
+                if not ok:
+                    for u, v, Lp in fn["linedisjoint"]:
+                        if Lp <= 0 or (Lp % L) != 0:
+                            continue
+                        su = _span_row(fn, arg_regs, entry_regs, u)
+                        sv = _span_row(fn, arg_regs, entry_regs, v)
+                        if su is None or sv is None:
+                            continue
+                        bu, lu = su
+                        bv, lv = sv
+                        def _sub(b, l, b0, l0):
+                            return r_plain(st["facts"], r_sub(b, b0)) and r_plain(st["facts"], r_sub(r_add(b0, l0), r_add(b, l)))
+                        if (_sub(bx, lx, bu, lu) and _sub(by_, ly, bv, lv)) or (_sub(bx, lx, bv, lv) and _sub(by_, ly, bu, lu)):
+                            ok = True
+                            break
+                if not ok:
+                    raise Refuse(f"arguments `{x}` and `{y}` are not shown to be {L}-byte cache-line disjoint")
         for k, terms in fn["linpre"]:
             facts.append(self.linpre_row(k, terms, env))
         for req in fn["requires"]:
@@ -1298,8 +1393,12 @@ class Verifier:
                         raise Refuse(f"unsupported and64 mask {mask_m}")
                     k, w = sp
                     if k == 0:
+                        if _is_aligned(val_x, 1 << w):
+                            return r_const(0), (ma or mb)
                         return sym_low(val_x, 1 << w, st), (ma or mb)
                     if k + w == 64:
+                        if _is_aligned(val_x, 1 << k):
+                            return val_x, (ma or mb)
                         q = sym_quot(val_x, 1 << k, st)
                         return r_scale(1 << k, q), (ma or mb)
                     q1 = sym_quot(val_x, 1 << k, st)
@@ -1764,6 +1863,7 @@ class Verifier:
                                     self.entail(st["facts"], r_sub(cenv[anm], r_const(bnd)), stream)
                             for k, terms in c["linpre"]:
                                 self.entail(st["facts"], self.linpre_row(k, terms, cenv), stream)
+                            _check_call_align_ld(c, c_arg_regs, st)
                             if tval == fn["name"]:
                                 dnm = fn["decreases"]
                                 self.entail(st["facts"], r_sub(r_sub(env[dnm], cenv[dnm]), r_const(1)), stream)
@@ -1902,6 +2002,7 @@ class Verifier:
                                 self.entail(st["facts"], r_sub(cenv[anm], r_const(bnd)), stream)
                         for k, terms in c["linpre"]:
                             self.entail(st["facts"], self.linpre_row(k, terms, cenv), stream)
+                        _check_call_align_ld(c, c_arg_regs, st)
                         if callee_nm == fn["name"]:
                             dnm = fn["decreases"]
                             self.entail(st["facts"], r_sub(r_sub(env[dnm], cenv[dnm]), r_const(1)), stream)

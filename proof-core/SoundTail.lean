@@ -140,6 +140,10 @@ structure TailExtra (ctx : Ctx) (s0 st : State) (c : Contract) : Prop where
   mbounds : ∀ x off b, (x, off, b) ∈ c.mbounds → ∀ r n, (x, r, n) ∈ c.fixeds → load st.mem (st.reg r + off) 8 < b
   atLeast : ∀ x k, (x, k) ∈ c.atLeast → ∀ r, c.regOf x = some r → k ≤ st.reg r
   preLines : ∀ k ts, (k, ts) ∈ c.preLines → 0 ≤ preLineVal c st k ts
+  aligns : ∀ x al, (x, al) ∈ c.aligns → 0 < al → ∀ r, c.regOf x = some r → st.reg r % al = 0
+  lineDisjoint : ∀ x y L, (x, y, L) ∈ c.lineDisjoint → 0 < L →
+    ∀ bx lx by_ ly, c.bufSpan st x = some (bx, lx) → c.bufSpan st y = some (by_, ly) →
+      ∀ i < lx, ∀ j < ly, (bx + i) / L ≠ (by_ + j) / L
 
 theorem tailMbounds_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s : Sym} {name : String}
     {c : Contract} (E : Setting ctx p s0) (T : TailOk ctx s name c) (H : Holds ctx s0 ρ s st) :
@@ -230,10 +234,13 @@ theorem tailPreOk_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → 
   unfold tailPreOk at h
   obtain ⟨_, r0, e0, h⟩ := V.bind_ok h
   obtain ⟨_, rm, em, h⟩ := V.bind_ok h
-  obtain ⟨_, r1, e1, e2⟩ := V.bind_ok h
+  obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
+  obtain ⟨_, r2, e2, h⟩ := V.bind_ok h
+  obtain ⟨_, r3, e3, e4⟩ := V.bind_ok h
   have hg := stackFitsMAt_sound T.machine H e0
   have hmb := tailMbounds_sound E T H c.mbounds em
-  refine ⟨by omega, hmb, ?_, ?_⟩
+  have hreg : ∀ r ∈ c.argRegs, (st.reg r : Int) = ev ρ (s.reg r) := fun r hr => H.reg r (T.arg_lt hr)
+  refine ⟨by omega, hmb, ?_, ?_, callAlignsOk_sound_of E H hreg c.aligns e3, callLineDisjointOk_sound_of E H hreg c.lineDisjoint e4⟩
   · intro x k m r hr
     obtain ⟨_, _, he⟩ := each_mem e1 (x, k) m
     simp only [hr] at he
@@ -370,7 +377,7 @@ theorem tailCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           fun _ _ _ m => (by rw [hfix] at m; cases m), fun x bd m r hr => ?_,
           fun _ _ _ _ _ _ m => (by rw [hfix] at m; cases m),
           fun _ _ _ _ _ ht => (by rw [tableAt_none hl] at ht; cases ht),
-          EX.atLeast, harm_align, EX.preLines, fun _ _ _ _ _ m => (by rw [hva] at m; cases m)⟩
+          EX.atLeast, harm_align, EX.preLines, (fun _ _ _ _ _ m => (by rw [hva] at m; cases m)), EX.aligns, EX.lineDisjoint⟩
         · obtain ⟨b0, l0, hm, er, el⟩ := hregion r l m
           obtain ⟨fit, apart⟩ := E.regionAt hm
           show st.reg r + st.reg l ≤ M64 ∧ (st.reg r + st.reg l ≤ st.reg RSP - c.stackAt (afterTail q st) ∨ st.reg RSP + c.slot ≤ st.reg r)
@@ -527,7 +534,7 @@ theorem tailCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             fun _ _ _ m => (by rw [hfx] at m; cases m), fun x' bd m r' hr' => ?_,
             fun _ _ _ _ _ _ m => (by rw [hfx] at m; cases m),
             fun _ _ _ _ _ ht => (by rw [tableAt_none hl] at ht; cases ht),
-            EX.atLeast, harm_align, EX.preLines, fun _ _ _ _ _ m => (by rw [hva] at m; cases m)⟩
+            EX.atLeast, harm_align, EX.preLines, (fun _ _ _ _ _ m => (by rw [hva] at m; cases m)), EX.aligns, EX.lineDisjoint⟩
           · obtain ⟨b', off, nn, lb, _, _, _, g1, g3, g4, g5⟩ := hregpart r' l' m
             obtain ⟨fit, apart⟩ := E.regionAt g1
             show st.reg r' + st.reg l' ≤ M64 ∧ (st.reg r' + st.reg l' ≤ st.reg RSP - c.stackAt (afterTail q st) ∨ st.reg RSP + c.slot ≤ st.reg r')
@@ -774,7 +781,7 @@ theorem tailCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             fun r' l' m => ?_, fun x' r' n' m => ?_, (by rw [houts]; exact List.Pairwise.cons (fun _ m => nomatch m) List.Pairwise.nil),
             fun x' r' n' m => ?_, fun x' bd m r' hr' => ?_, EX.mbounds,
             fun _ _ _ _ _ ht => (by rw [tableAt_none hl] at ht; cases ht),
-            EX.atLeast, harm_align, EX.preLines, fun _ _ _ _ _ m => (by rw [hva] at m; cases m)⟩
+            EX.atLeast, harm_align, EX.preLines, (fun _ _ _ _ _ m => (by rw [hva] at m; cases m)), EX.aligns, EX.lineDisjoint⟩
           · obtain ⟨b', off, nn, lb, _, _, _, g1, g3, g4, g5⟩ := hregpart r' l' m
             obtain ⟨fit, apart⟩ := E.regionAt g1
             show st.reg r' + st.reg l' ≤ M64 ∧ (st.reg r' + st.reg l' ≤ st.reg RSP - c.stackAt (afterTail q st) ∨ st.reg RSP + c.slot ≤ st.reg r')

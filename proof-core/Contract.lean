@@ -339,6 +339,8 @@ structure Contract where
   lanes : List (String × String) := []    -- (a run of a fixed count given to read, an argument that is a number): each eight
                                       -- bytes of the run are the address of that many blocks of 64 bytes, given to read
   atLeast : List (String × Nat) := []     -- (an argument that is a number, n): the caller sees to it that the number is no less than n
+  aligns : List (String × Nat) := []      -- (a buffer argument, A): the caller sees to it that its address is a multiple of A (A > 0)
+  lineDisjoint : List (String × String × Nat) := []  -- (argA, argB, L): cache-line disjoint at line size L (L > 0)
   hidden : List String := []              -- the runs given to read whose bytes may be marked, and the
                                           -- numbers given that may be: what can be observed of a run of the
                                           -- function must not depend on them
@@ -448,6 +450,21 @@ def regionsIn (c : Contract) : List (String × Kind) → List Nat → List (Nat 
   | (_, .inout _) :: args, _ :: regs => regionsIn c args regs
   | (_, .valArray _ _ _) :: args, _ :: regs => regionsIn c args regs
   | _, _ => []
+
+/-- The `(base, byte_length)` extent of a named buffer argument given register map `reg`. -/
+def bufSpanIn (c : Contract) (reg : Nat → Nat) (name : String) : List (String × Kind) → List Nat → Option (Nat × Nat)
+  | (n, k) :: args, r :: regs =>
+    if n == name then
+      match k with
+      | .bytes len => (c.regOf len).map fun l => (reg r, reg l)
+      | .out cnt | .fixed cnt | .inout cnt => some (reg r, cnt)
+      | .valArray len ch el => (c.regOf len).map fun l => (reg r, el * (reg l / ch))
+      | .number => none
+    else bufSpanIn c reg name args regs
+  | _, _ => none
+
+def Contract.bufSpan (c : Contract) (s : State) (name : String) : Option (Nat × Nat) :=
+  bufSpanIn c s.reg name c.args c.argRegs
 
 /-- The runs of bytes the function is given to read: (the register with the address, the register with the length). -/
 def Contract.regions (c : Contract) : List (Nat × Nat) := regionsIn c c.args c.argRegs
@@ -657,7 +674,11 @@ def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
   (∀ x r l ch el, (x, r, l, ch, el) ∈ c.valArrays →
     s.reg r + el * (s.reg l / ch) < M64 ∧
     (s.reg r + el * (s.reg l / ch) ≤ s.reg RSP - c.stackAt s ∨ s.reg RSP + c.slot ≤ s.reg r) ∧
-    ∀ x' r' n', (x', r', n') ∈ c.outs → s.reg r + el * (s.reg l / ch) ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r)
+    ∀ x' r' n', (x', r', n') ∈ c.outs → s.reg r + el * (s.reg l / ch) ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r) ∧
+  (∀ x al, (x, al) ∈ c.aligns → 0 < al → ∀ r, c.regOf x = some r → s.reg r % al = 0) ∧
+  (∀ x y L, (x, y, L) ∈ c.lineDisjoint → 0 < L →
+    ∀ bx lx by_ ly, c.bufSpan s x = some (bx, lx) → c.bufSpan s y = some (by_, ly) →
+      ∀ i < lx, ∀ j < ly, (bx + i) / L ≠ (by_ + j) / L)
 
 /-- Entry-value promises for every read-only `valArray` argument: for each `i < len / chunk`,
 the `elem` bytes at `r + elem * i` are the `elem / 4` words of `expr` with `idx := i`.

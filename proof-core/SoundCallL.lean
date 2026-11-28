@@ -2149,7 +2149,7 @@ theorem symCallL_pre {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
   have hslot := F.slot
   have h8 : c.slot ≤ st.reg RSP := by omega
   refine ⟨afterCall_rip p q i st, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, afterCall_aligned F p q, hex.preLines,
-    fun _ _ _ _ _ m => by rw [hva] at m; cases m⟩
+    (fun _ _ _ _ _ m => by rw [hva] at m; cases m), hex.aligns, hex.lineDisjoint⟩
   · exact afterCall_small F.link H.small
   · rw [s1rsp]; omega
   · rw [s1rsp]; omega

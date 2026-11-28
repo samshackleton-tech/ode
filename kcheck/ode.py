@@ -240,7 +240,7 @@ class Parser:
         self.take("("); args = []
         while not self.maybe(")"):
             arg = self.take(kind="name"); self.take(":"); args.append((arg, self.kind())); self.maybe(",")
-        c = dict(args=args, asks=[], given=[], leaves=[], spoils=[], returns=None, stack=None, calls=[], needs=[], decreases=None, no_overlap=None, trace=[], trace_exprs=[], result_dep=None, conditions=[], calling=None)
+        c = dict(args=args, asks=[], given=[], leaves=[], spoils=[], returns=None, stack=None, calls=[], needs=[], decreases=None, no_overlap=None, aligns=[], line_disjoint=[], trace=[], trace_exprs=[], result_dep=None, conditions=[], calling=None)
         self.take("{")
         def once(what, key):
             # said twice, the second would silently be the one meant
@@ -252,6 +252,32 @@ class Parser:
                 once("requires no_overlap(...)", "no_overlap")
                 self.take(); self.take("("); c["no_overlap"] = []
                 while not self.maybe(")"): c["no_overlap"].append(self.take(kind="name")); self.maybe(",")
+            elif clause == "requires" and self.t[self.i][:2] == ("name", "aligned") and self.t[self.i + 1][1] == "(":
+                # requires aligned(buf, A): buffer base address is a multiple of A (cache-line / SIMD / page boundary)
+                line_no = self.t[self.i][2]
+                self.take(); self.take("(")
+                aname = self.take(kind="name"); self.take(",")
+                al = self.take(kind="num"); self.take(")")
+                if al not in (8, 16, 32, 64, 128, 4096, 16384):
+                    raise Err(f"line {line_no}: `requires aligned({aname}, {al})`: alignment must be one of 8, 16, 32, 64, 128, 4096, 16384")
+                c["aligns"].append((aname, al))
+            elif clause == "requires" and self.t[self.i][:2] == ("name", "line_disjoint") and self.t[self.i + 1][1] == "(":
+                # requires line_disjoint(a, b[, ...][, L]): buffers occupy disjoint L-byte cache lines (default L = 64)
+                line_no = self.t[self.i][2]
+                self.take(); self.take("(")
+                bufs, line_sz = [], 64
+                while not self.maybe(")"):
+                    if self.peek(kind="num"):
+                        line_sz = self.take(kind="num")
+                        self.take(")")
+                        break
+                    bufs.append(self.take(kind="name"))
+                    self.maybe(",")
+                if len(bufs) < 2:
+                    raise Err(f"line {line_no}: `requires line_disjoint(...)` needs at least two buffer arguments")
+                if line_sz not in (64, 128):
+                    raise Err(f"line {line_no}: `requires line_disjoint(..., {line_sz})`: cache-line size must be 64 or 128")
+                c["line_disjoint"].append((bufs, line_sz))
             elif clause == "requires":
                 e = self.expr()
                 if self.maybe("for"):

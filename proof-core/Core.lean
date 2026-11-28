@@ -1320,23 +1320,47 @@ def maskSpan (m : Int) : Option (Nat × Nat) :=
           if w ≥ 1 && (2 : Int) ^ w - 1 == q then some (k, w) else none
       else none
 
-/-- Bitwise AND of a symbolic 64-bit value `x` with a known constant mask `m`. -/
-def symAndConst (s : Sym) (x : Row) (m : Int) : V (EV × Sym) :=
+/-- Is `ev ρ addr` provably a multiple of `al` (`al > 0`) from entry alignment preconditions (`c.aligns`)
+and AArch64's 16-byte stack alignment? Every variable `i` with coefficient not divisible by `al` must be
+an aligned entry register (`a0 % al = 0`) or `RSP` on AArch64 (`16 % al = 0`), and `addr.constant % al = 0`. -/
+def isAligned (c : Contract) (addr : Row) (al : Nat) : Bool :=
+  decide (0 < al) && (addr.constant % (al : Int) == 0) &&
+  (List.range addr.coeff.length).all fun i =>
+    let ci := addr.coeff.getD i 0
+    (ci % (al : Int) == 0) ||
+    c.aligns.any (fun (x, a0) => decide (0 < a0) && (a0 % al == 0) && (c.regOf x == some i)) ||
+    (c.arm64 && i == RSP && 16 % al == 0)
+
+/-- Bitwise AND of a symbolic 64-bit value `x` with a known constant mask `m`, using `c.aligns` to simplify
+low-bit alignment checks (`x & (2^w - 1) == 0`) and align-down masks (`x & ~(2^k - 1) == x`). -/
+def symAndConst (c : Contract) (s : Sym) (x : Row) (m : Int) : V (EV × Sym) :=
   if m == 0 then pure (.lin (Lin.const 0), s)
   else match maskSpan m with
   | some (0, w) =>
-    let d := symLow s x ((2 : Int) ^ w)
-    pure (.lin d.1, d.2)
+    if isAligned c x (2 ^ w) then pure (.lin (Lin.const 0), s)
+    else
+      let d := symLow s x ((2 : Int) ^ w)
+      pure (.lin d.1, d.2)
   | some (k, w) =>
     if k + w == 64 then
-      let d := symQuot s x ((2 : Int) ^ k)
-      pure (.lin (Lin.scale ((2 : Int) ^ k) d.1), d.2)
+      if isAligned c x (2 ^ k) then pure (.lin x, s)
+      else
+        let d := symQuot s x ((2 : Int) ^ k)
+        pure (.lin (Lin.scale ((2 : Int) ^ k) d.1), d.2)
     else
       let d1 := symQuot s x ((2 : Int) ^ k)
       let d2 := symLow d1.2 d1.1 ((2 : Int) ^ w)
       pure (.lin (Lin.scale ((2 : Int) ^ k) d2.1), d2.2)
   | none =>
     refuse "no proof rule for this AND mask (supported: any contiguous bitmask (2^w - 1) << k, or 0)"
+
+def symAnd (c : Contract) (s : Sym) (x y : Row) : V (EV × Sym) :=
+  match constOf s.facts y with
+  | some m => symAndConst c s x m
+  | none =>
+    match constOf s.facts x with
+    | some m => symAndConst c s y m
+    | none => refuse "an and with what is no number of the table: not here yet"
 
 /-- Optional wrapping tag in a proof: consumes `.tag "wrap" _` when present (signaling exact modular
 wraparound mod 2^64 on `add64` or `sub64`) unless the exact result is already plainly in range
@@ -1413,12 +1437,7 @@ def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
       else refuse "a shift by 64 or more"
     | none => refuse "a shift by what is no number of the table: not here yet"
   else if f == "and64" then
-    match constOf s.facts y with
-    | some m => symAndConst s x m
-    | none =>
-      match constOf s.facts x with
-      | some m => symAndConst s y m
-      | none => refuse "an and with what is no number of the table: not here yet"
+    symAnd { args := [], returns := none, stack := 0 } s x y
   else if f == "sub8" then
     -- a byte less a byte, wrapping: the remainder by 256 of the one, and 256, less the other's low byte
     let y' := symLow s y 256
@@ -1482,7 +1501,7 @@ def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
     | .lin x, .lin y =>
       match memSize f with
       | some size => symLoad ctx s (Lin.add (signed x) (signed y)) size
-      | none => if f == "or64" then symOr s x y else symPrim f s x y
+      | none => if f == "or64" then symOr s x y else if f == "and64" then symAnd ctx.contract s x y else symPrim f s x y
     | _, _ => refuse "a flag's value where a number is expected"
   | _, .call f _ => refuse s!"no rule for {f}"
 
@@ -5221,8 +5240,66 @@ def callMboundsOk (ctx : Ctx) (s : Sym) (sp : Int) (c : Contract) : V Unit :=
               else refuse "a called function bounds a number outside the frame"
             | none => refuse "a called function bounds a number in memory that is not known to lie below that bound") c.fixeds) c.mbounds
 
+/-- Symbolic `(baseRow, lenRow)` extent of a named buffer parameter of `c` using register map `reg`. -/
+def spanRowIn (c : Contract) (reg : Nat → Row) (name : String) : List (String × Kind) → List Nat → Option (Row × Row)
+  | (n, k) :: args, r :: regs =>
+    if n == name then
+      match k with
+      | .bytes len => (c.regOf len).map fun l => (reg r, reg l)
+      | .out cnt | .fixed cnt | .inout cnt => some (reg r, Lin.const cnt)
+      | .valArray _ _ _ => none
+      | .number => none
+    else spanRowIn c reg name args regs
+  | _, _ => none
+
+def spanRow (c : Contract) (reg : Nat → Row) (name : String) : Option (Row × Row) :=
+  spanRowIn c reg name c.args c.argRegs
+
+/-- Check that `[b, b + l)` lies within caller buffer `name`'s entry extent. -/
+def subSpanOf (ctx : Ctx) (s : Sym) (b l : Row) (name : String) : Bool :=
+  match spanRow ctx.contract Lin.var name with
+  | some (bu, lu) =>
+    plain s.facts (Lin.sub b bu) && plain s.facts (Lin.sub (Lin.add bu lu) (Lin.add b l))
+  | none => false
+
+/-- Check that two symbolic extents `[bx, bx + lx)` and `[by_, by_ + ly)` are cache-line disjoint at line
+size `L > 0`: either one has length 0, or they are separated by an `L`-aligned boundary (`bx + lx ≤ by_`
+with `by_ % L = 0`, or symmetrically), or they are sub-spans of caller buffers already `lineDisjoint` at
+a multiple `L'` of `L`. -/
+def lineDisjointPairOk (ctx : Ctx) (s : Sym) (bx lx by_ ly : Row) (L : Nat) : Bool :=
+  (Lin.isConst lx == some 0) || (Lin.isConst ly == some 0) ||
+  (isAligned ctx.contract by_ L && plain s.facts (Lin.sub by_ (Lin.add bx lx))) ||
+  (isAligned ctx.contract bx L && plain s.facts (Lin.sub bx (Lin.add by_ ly))) ||
+  ctx.contract.lineDisjoint.any fun (u, v, L') =>
+    decide (0 < L') && decide (L' % L == 0) &&
+    ((subSpanOf ctx s bx lx u && subSpanOf ctx s by_ ly v) ||
+     (subSpanOf ctx s bx lx v && subSpanOf ctx s by_ ly u))
+
+/-- Check callee buffer alignment preconditions (`c.aligns`) at a call or tail call. -/
+def callAlignsOk (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
+  each (fun (x, al) =>
+    if al == 0 then pure ()
+    else match c.regOf x with
+    | some r =>
+      if isAligned ctx.contract (s.reg r) al then pure ()
+      else refuse s!"argument `{x}` is not shown to be {al}-byte aligned"
+    | none => pure ()) c.aligns
+
+/-- Check callee cache-line disjointness preconditions (`c.lineDisjoint`) at a call or tail call. -/
+def callLineDisjointOk (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
+  each (fun (x, y, L) =>
+    if L == 0 then pure ()
+    else match spanRow c s.reg x, spanRow c s.reg y with
+    | some (bx, lx), some (by_, ly) =>
+      if lineDisjointPairOk ctx s bx lx by_ ly L then pure ()
+      else refuse s!"arguments `{x}` and `{y}` are not shown to be {L}-byte cache-line disjoint"
+    | _, _ =>
+      if (c.regOf x).isNone || (c.regOf y).isNone then pure ()
+      else refuse s!"arguments `{x}` and `{y}` have extents not handled for {L}-byte cache-line disjointness") c.lineDisjoint
+
 /-- Check stack budget (`stackFitsM`), callee `mbounds`, callee numeric lower bounds (`atLeast`),
-multi-variable linear preconditions (`preLines`), and strict decrease of `decreases` on a direct recursive self-call. -/
+multi-variable linear preconditions (`preLines`), buffer alignments (`aligns`), cache-line disjointness
+(`lineDisjoint`), and strict decrease of `decreases` on a direct recursive self-call. -/
 def callPreOk (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : V Unit := do
   match s.sp with
   | none => refuse "at a call the stack pointer is not known"
@@ -5235,6 +5312,8 @@ def callPreOk (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : V Unit := d
     | none => pure ()) c.atLeast
   each (fun (kt : Int × List (String × Int)) =>
     entail s.facts (preLineRow c s.reg kt.1 kt.2)) c.preLines
+  callAlignsOk ctx s c
+  callLineDisjointOk ctx s c
   if ctx.selfName == some name then
     match c.decreases with
     | some d =>
@@ -5501,7 +5580,7 @@ def tailFits (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : Bool :=
   (c.fixeds.all fun x => (frameAt s x.2.1).isNone)
 
 /-- Entry preconditions at a tail call: callee stack fits with zero extra return-address slot (`extra = 0`),
-plus callee `mbounds`, `atLeast`, and `preLines`. -/
+plus callee `mbounds`, `atLeast`, `preLines`, `aligns`, and `lineDisjoint`. -/
 def tailPreOk (ctx : Ctx) (s : Sym) (c : Contract) : V Unit := do
   stackFitsMAt ctx s 0 0 c
   callMboundsOk ctx s 0 c
@@ -5511,6 +5590,8 @@ def tailPreOk (ctx : Ctx) (s : Sym) (c : Contract) : V Unit := do
     | none => pure ()) c.atLeast
   each (fun (kt : Int × List (String × Int)) =>
     entail s.facts (preLineRow c s.reg kt.1 kt.2)) c.preLines
+  callAlignsOk ctx s c
+  callLineDisjointOk ctx s c
 
 /-- A tail call: checks `tailFits`, `needsOf`, `symKnow`, `tailPreOk`, `symCall'`, `callQuiet`,
 `resultFollowsTrace` on `retReg`, and `symReturn` on the resulting post-call state. -/

@@ -2659,6 +2659,51 @@ theorem symOrSmall_lin {s s1 : Sym} {x : Row} {k : Int} {j : Nat} {val : EV} {it
     | lin ur => have := V.pure_ok hp; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, hsf⟩
     | equal _ _ | below _ _ => exact (refuse_ok hp).elim
 
+theorem symAndConst_lin {c : Contract} {s s1 : Sym} {x : Row} {m : Int} {val : EV} {items rest : Items}
+    (h : symAndConst c s x m items = .ok ((val, s1), rest)) : (∃ r, val = .lin r) ∧ s1.zf = s.zf ∧ s1.cf = s.cf := by
+  unfold symAndConst at h
+  by_cases hm0 : (m == 0) = true
+  · simp only [hm0, ite_true] at h
+    have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, rfl, rfl⟩
+  · simp only [hm0, ite_false] at h
+    cases hms : maskSpan m with
+    | none => simp only [hms] at h; exact (refuse_ok (items := items) h).elim
+    | some kw =>
+      rcases kw with ⟨k, w⟩
+      cases k with
+      | zero =>
+        simp only [hms] at h
+        by_cases hal : isAligned c x (2 ^ w) = true
+        · simp only [hal, ite_true] at h
+          have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, rfl, rfl⟩
+        · simp only [hal, ite_false] at h
+          have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, symLow_flags s x _⟩
+      | succ k' =>
+        simp only [hms] at h
+        by_cases h64 : (k' + 1 + w == 64) = true
+        · simp only [h64, ite_true] at h
+          by_cases hal : isAligned c x (2 ^ (k' + 1)) = true
+          · simp only [hal, ite_true] at h
+            have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, rfl, rfl⟩
+          · simp only [hal, ite_false] at h
+            have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, symQuot_flags s x _⟩
+        · simp only [h64, ite_false] at h
+          have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2
+          have f1 := symQuot_flags s x ((2 : Int) ^ (k' + 1))
+          have f2 := symLow_flags (symQuot s x ((2 : Int) ^ (k' + 1))).2 (symQuot s x ((2 : Int) ^ (k' + 1))).1 ((2 : Int) ^ w)
+          exact ⟨⟨_, rfl⟩, f2.1.trans f1.1, f2.2.trans f1.2⟩
+
+theorem symAnd_lin {c : Contract} {s s1 : Sym} {x y : Row} {val : EV} {items rest : Items}
+    (h : symAnd c s x y items = .ok ((val, s1), rest)) : (∃ r, val = .lin r) ∧ s1.zf = s.zf ∧ s1.cf = s.cf := by
+  unfold symAnd at h
+  cases hc : constOf s.facts y with
+  | some m => simp only [hc] at h; exact symAndConst_lin h
+  | none =>
+    simp only [hc] at h
+    cases hcx : constOf s.facts x with
+    | some m => simp only [hcx] at h; exact symAndConst_lin h
+    | none => simp only [hcx] at h; exact (refuse_ok (items := items) h).elim
+
 theorem symOr_lin {s s1 : Sym} {x y : Row} {val : EV} {items rest : Items}
     (h : symOr s x y items = .ok ((val, s1), rest)) : (∃ r, val = .lin r) ∧ s1.zf = s.zf ∧ s1.cf = s.cf := by
   unfold symOr at h
@@ -2755,39 +2800,8 @@ theorem symPrim_flags {f : String} {s s1 : Sym} {x y : Row} {val : EV} {items re
             · simp only [h6, ite_false] at h
               by_cases h7 : (f == "and64") = true
               · simp only [h7, ite_true] at h
-                have ofAnd : ∀ {x' : Row} {m : Int}, symAndConst s x' m items = .ok ((val, s1), rest) →
-                    s1.zf = s.zf ∧ s1.cf = s.cf ∧
-                    (∀ a b, val = .equal a b → f = "equal" ∧ a = x ∧ b = y ∧ s1 = s) ∧
-                    (∀ a b, val = .below a b → f = "below" ∧ a = x ∧ b = y ∧ s1 = s) := by
-                  intro x' m ha
-                  unfold symAndConst at ha
-                  by_cases hm0 : (m == 0) = true
-                  · simp only [hm0, ite_true] at ha; exact ofLin _ _ _ ha rfl rfl
-                  · simp only [hm0, ite_false] at ha
-                    cases hms : maskSpan m with
-                    | none => simp only [hms] at ha; exact (refuse_ok (items := items) ha).elim
-                    | some kw =>
-                      rcases kw with ⟨k, w⟩
-                      cases k with
-                      | zero =>
-                        simp only [hms] at ha
-                        exact ofLin _ _ _ ha (symLow_flags s x' _).1 (symLow_flags s x' _).2
-                      | succ k' =>
-                        simp only [hms] at ha
-                        by_cases h64 : (k' + 1 + w == 64) = true
-                        · simp only [h64, ite_true] at ha
-                          exact ofLin _ _ _ ha (symQuot_flags s x' _).1 (symQuot_flags s x' _).2
-                        · simp only [h64, ite_false] at ha
-                          have f1 := symQuot_flags s x' ((2 : Int) ^ (k' + 1))
-                          have f2 := symLow_flags (symQuot s x' ((2 : Int) ^ (k' + 1))).2 (symQuot s x' ((2 : Int) ^ (k' + 1))).1 ((2 : Int) ^ w)
-                          exact ofLin _ _ _ ha (f2.1.trans f1.1) (f2.2.trans f1.2)
-                cases hc : constOf s.facts y with
-                | some m => simp only [hc] at h; exact ofAnd h
-                | none =>
-                  simp only [hc] at h
-                  cases hcx : constOf s.facts x with
-                  | some m => simp only [hcx] at h; exact ofAnd h
-                  | none => simp only [hcx] at h; exact (refuse_ok (items := items) h).elim
+                obtain ⟨⟨r, rfl⟩, hzf, hcf⟩ := symAnd_lin h
+                exact ⟨hzf, hcf, (fun _ _ he => by cases he), (fun _ _ he => by cases he)⟩
               · simp only [h7, ite_false] at h
                 by_cases h8 : (f == "sub8") = true
                 · simp only [h8, ite_true] at h
@@ -2855,7 +2869,10 @@ theorem symValue_flags {ctx : Ctx} (bind : Bind) :
             simp only [hms] at h
             by_cases hor : (f == "or64") = true
             · simp only [hor, ite_true] at h; exact (symOr_lin h).2
-            · simp only [hor, ite_false] at h; have := symPrim_flags h; exact ⟨this.1, this.2.1⟩
+            · simp only [hor, ite_false] at h
+              by_cases hand : (f == "and64") = true
+              · simp only [hand, ite_true] at h; exact (symAnd_lin h).2
+              · simp only [hand, ite_false] at h; have := symPrim_flags h; exact ⟨this.1, this.2.1⟩
         exact ⟨h3f.1.trans (ih2.1.trans ih1.1), h3f.2.trans (ih2.2.trans ih1.2)⟩
   | .call _ (_ :: _ :: _ :: _), _, _, _, _, _, h => by simp only [symValue] at h; exact (refuse_ok h).elim
 
@@ -2931,10 +2948,13 @@ theorem symValue_flag_operands {ctx : Ctx} {p : Program} {a0 b0 sta stb : State}
                   by_cases hor : (f == "or64") = true
                   · simp only [hor, ite_true] at hsv; exact (notLin (symOr_lin hsv).1).elim
                   · simp only [hor, ite_false] at hsv
-                    obtain ⟨_, _, heq, hbl⟩ := symPrim_flags hsv
-                    rcases he with h3 | h3
-                    · obtain ⟨hf, ex, ey, es⟩ := heq x y h3; subst ex ey; exact ⟨Or.inl ⟨hf, h3⟩, rfl, rfl, es⟩
-                    · obtain ⟨hf, ex, ey, es⟩ := hbl x y h3; subst ex ey; exact ⟨Or.inr ⟨hf, h3⟩, rfl, rfl, es⟩
+                    by_cases hand : (f == "and64") = true
+                    · simp only [hand, ite_true] at hsv; exact (notLin (symAnd_lin hsv).1).elim
+                    · simp only [hand, ite_false] at hsv
+                      obtain ⟨_, _, heq, hbl⟩ := symPrim_flags hsv
+                      rcases he with h3 | h3
+                      · obtain ⟨hf, ex, ey, es⟩ := heq x y h3; subst ex ey; exact ⟨Or.inl ⟨hf, h3⟩, rfl, rfl, es⟩
+                      · obtain ⟨hf, ex, ey, es⟩ := hbl x y h3; subst ex ey; exact ⟨Or.inr ⟨hf, h3⟩, rfl, rfl, es⟩
               obtain ⟨hfeb, rfl, rfl, es1⟩ := hfb
               subst s1
               have hlo : lowOnly bind f [e1, e2] = none := by

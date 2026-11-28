@@ -237,6 +237,290 @@ def _frame_field_for(frame, sp_entry, addr):
     return f"frame (sp+{off})"
 
 
+def _resolve_reg_expr(e, bind):
+    """If `e` is a register name (or `on16(reg)`), return the concrete register name, else None."""
+    if e[0] == "name":
+        if e[1] in table.REGISTERS:
+            return bind.get(e[1])
+        return e[1] if e[1] in ("sp", "rsp") else None
+    if e[0] == "call" and e[1] == "on16" and len(e[2]) == 1:
+        return _resolve_reg_expr(e[2][0], bind)
+    return None
+
+
+def _resolve_int_expr(e, bind):
+    if e[0] == "number":
+        return e[1]
+    if e[0] == "name" and e[1] in table.NUMBERS and isinstance(bind.get(e[1]), int):
+        return bind[e[1]]
+    return None
+
+
+def _extract_mem_from_expr(e, bind, direction, out):
+    if e[0] != "call":
+        return
+    if e[1] in table.SIZES:
+        width = table.SIZES[e[1]]
+        args = e[2]
+        base, off, idx = None, 0, None
+        if len(args) >= 1:
+            base = _resolve_reg_expr(args[0], bind)
+        if len(args) >= 2:
+            c = _resolve_int_expr(args[1], bind)
+            if c is not None:
+                off = c
+            else:
+                idx = _resolve_reg_expr(args[1], bind)
+                off = None
+        if len(args) >= 3:
+            idx = _resolve_reg_expr(args[2], bind)
+        out.append({"dir": direction, "base": base, "offset": off, "index": idx, "width": width})
+        return
+    for a in e[2]:
+        _extract_mem_from_expr(a, bind, direction, out)
+
+
+def _extract_mem_ops(row, bind):
+    """Extract memory-access descriptors `[{dir, base, offset, index, width}]` from `row.effect`."""
+    ops = []
+    for st in row.effect:
+        if st[0] != "set":
+            continue
+        _, lhs, rhs = st
+        _extract_mem_from_expr(rhs, bind, "load", ops)
+        if lhs[0] == "call" and lhs[1] in table.SIZES:
+            _extract_mem_from_expr(lhs, bind, "store", ops)
+    return ops
+
+
+def _extract_reg_delta(row, bind):
+    """If `row.effect` updates a GPR `r := r +/- K` (constant K), return `(r, delta)`, else None."""
+    for st in row.effect:
+        if st[0] != "set":
+            continue
+        _, lhs, rhs = st
+        if lhs[0] != "name":
+            continue
+        dst = _resolve_reg_expr(lhs, bind)
+        if dst is None or rhs[0] != "call" or rhs[1] not in ("add64", "sub64") or len(rhs[2]) != 2:
+            continue
+        r0 = _resolve_reg_expr(rhs[2][0], bind)
+        k = _resolve_int_expr(rhs[2][1], bind)
+        if r0 == dst and k is not None:
+            return (dst, k if rhs[1] == "add64" else -k)
+    return None
+
+
+def _extract_addr_def(row, bind):
+    """If `row.effect` defines a GPR as a copy `dst = src` or sum `dst = a + b` (for base+index
+    addressing), return `("copy", dst, src)` or `("sum", dst, a, b)`, else None."""
+    for st in row.effect:
+        if st[0] != "set":
+            continue
+        _, lhs, rhs = st
+        if lhs[0] != "name":
+            continue
+        dst = _resolve_reg_expr(lhs, bind)
+        if dst is None:
+            continue
+        if rhs[0] == "name":
+            src = _resolve_reg_expr(rhs, bind)
+            if src is not None and src != dst:
+                return ("copy", dst, src)
+        elif rhs[0] == "call" and rhs[1] in ("add64", "at") and len(rhs[2]) == 2:
+            r0 = _resolve_reg_expr(rhs[2][0], bind)
+            r1 = _resolve_reg_expr(rhs[2][1], bind)
+            if r0 is not None and r1 is not None:
+                return ("sum", dst, r0, r1)
+            # Also handle 3-operand LEA form `add64(add64(B, S), N)` / `at(add64(B, S), N)`
+            if rhs[2][0][0] == "call" and rhs[2][0][1] in ("add64", "at") and len(rhs[2][0][2]) == 2:
+                b0 = _resolve_reg_expr(rhs[2][0][2][0], bind)
+                b1 = _resolve_reg_expr(rhs[2][0][2][1], bind)
+                if b0 is not None and b1 is not None:
+                    return ("sum", dst, b0, b1)
+    return None
+
+
+def _analyze_locality(seq, target, arch_key, line_bytes, page_bytes):
+    """Static cache-line, VM-page, and memory-stream locality summary for an instruction sequence."""
+    sp_reg = "sp" if target == "arm64" else "rsp"
+    reg_deltas = collections.defaultdict(int)
+    reg_nonconst = set()
+    reg_loaded = set()
+    for it in seq:
+        delta = it.get("reg_delta")
+        if delta is not None:
+            reg_deltas[delta[0]] += delta[1]
+            continue
+        for w in it["writes"]:
+            if not w.startswith("frame:") and w not in ("zf", "cf") and not w.startswith("v") and not w.startswith("k"):
+                reg_nonconst.add(w)
+                if any(op["dir"] == "load" for op in (it.get("mem_ops") or ())):
+                    reg_loaded.add(w)
+
+    # Track single-iteration base+index address temporaries (e.g. `mov tmp, base; add tmp, idx` on x86-64
+    # or `add tmp, base, idx` on arm64) so indexed loads/stores resolve to `(base, idx)`.
+    reg_alias = {}     # tmp -> orig_reg
+    reg_addr_sum = {}  # tmp -> (base, idx)
+    streams_map = {}  # (base, index) -> info
+    read_bytes = 0
+    write_bytes = 0
+    split_hits = []
+    frame_lines = set()
+    for it in seq:
+        for op in it.get("mem_ops") or ():
+            base, idx, off, w, d = op["base"], op["index"], op["offset"], op["width"], op["dir"]
+            if idx is None and base in reg_addr_sum:
+                base, idx = reg_addr_sum[base]
+            elif idx is None and base in reg_alias:
+                base = reg_alias[base]
+            if d == "load":
+                read_bytes += w
+            else:
+                write_bytes += w
+            if off is not None and w > 1 and (off % line_bytes) + w > line_bytes:
+                split_hits.append((it["pc"], base or "?", off, w))
+            if base == sp_reg:
+                if off is not None:
+                    for ln in range(off // line_bytes, (off + w - 1) // line_bytes + 1):
+                        frame_lines.add(ln)
+                continue
+            key = (base or "?", idx)
+            rec = streams_map.setdefault(key, {
+                "base": base or "?", "index": idx, "dirs": set(),
+                "read_bytes": 0, "write_bytes": 0, "offsets": set(), "widths": set(),
+                "split_offsets": set(),
+            })
+            rec["dirs"].add(d)
+            if d == "load":
+                rec["read_bytes"] += w
+            else:
+                rec["write_bytes"] += w
+            rec["widths"].add(w)
+            if off is not None:
+                rec["offsets"].add(off)
+                if w > 1 and (off % line_bytes) + w > line_bytes:
+                    rec["split_offsets"].add(off)
+        adef = it.get("addr_def")
+        if adef is not None:
+            if adef[0] == "copy":
+                _, dst, src = adef
+                reg_alias[dst] = reg_alias.get(src, src)
+                reg_addr_sum.pop(dst, None)
+            elif adef[0] == "sum":
+                _, dst, r0, r1 = adef
+                a0 = reg_alias.get(r0, r0)
+                a1 = reg_alias.get(r1, r1)
+                reg_addr_sum[dst] = (a0, a1)
+                reg_alias.pop(dst, None)
+        else:
+            for w in it["writes"]:
+                if w in reg_alias:
+                    reg_alias.pop(w, None)
+                if w in reg_addr_sum:
+                    reg_addr_sum.pop(w, None)
+
+    streams = []
+    read_streams = write_streams = rmw_streams = 0
+    est_lines = len(frame_lines)
+    alias_4k_streams = []
+    for key in sorted(streams_map, key=lambda kv: (kv[0], kv[1] or "")):
+        rec = streams_map[key]
+        dirs = rec["dirs"]
+        if dirs == {"load"}:
+            sdir = "read"
+            read_streams += 1
+        elif dirs == {"store"}:
+            sdir = "write"
+            write_streams += 1
+        else:
+            sdir = "rmw"
+            rmw_streams += 1
+        base, idx = rec["base"], rec["index"]
+        # Determine stride per iteration
+        if base in reg_loaded or (idx is not None and idx in reg_loaded):
+            stride, pattern = None, "indirect"
+        elif base in reg_nonconst or (idx is not None and idx in reg_nonconst):
+            stride, pattern = None, "unknown"
+        else:
+            stride = reg_deltas.get(base, 0) + (reg_deltas.get(idx, 0) if idx is not None else 0)
+            if stride == 0:
+                pattern = "invariant"
+            else:
+                span = (max(rec["offsets"]) + max(rec["widths"]) - min(rec["offsets"])) if rec["offsets"] else max(rec["widths"])
+                pattern = "unit" if abs(stride) <= max(line_bytes, span) else "strided"
+                if abs(stride) % 4096 == 0:
+                    alias_4k_streams.append((base, stride))
+        touched = set()
+        if rec["offsets"]:
+            max_w = max(rec["widths"])
+            for o in rec["offsets"]:
+                for ln in range(o // line_bytes, (o + max_w - 1) // line_bytes + 1):
+                    touched.add(ln)
+            s_lines = len(touched)
+        else:
+            s_lines = 1
+        est_lines += s_lines
+        streams.append({
+            "base": base,
+            "index": idx,
+            "dir": sdir,
+            "stride": stride,
+            "pattern": pattern,
+            "read_bytes": rec["read_bytes"],
+            "write_bytes": rec["write_bytes"],
+            "offsets": sorted(rec["offsets"]),
+            "est_lines_per_iter": s_lines,
+            "split_line_offsets": sorted(rec["split_offsets"]),
+        })
+
+    hints = []
+    if split_hits:
+        pc0, b0, o0, w0 = split_hits[0]
+        hints.append({
+            "kind": "line-split",
+            "count": len(split_hits),
+            "message": (
+                f"{len(split_hits)} fixed-offset access(es) straddle a {line_bytes}B cache-line boundary "
+                f"(first at +0x{pc0:x}: {w0}B at [{b0}+{o0}], {o0 % line_bytes}+{w0} > {line_bytes}); "
+                f"align offsets to {line_bytes}B lines to avoid split-line penalties"
+            ),
+        })
+    max_streams = 12 if arch_key == "apple_m" else 8
+    total_streams = read_streams + write_streams + rmw_streams
+    if total_streams > max_streams:
+        hints.append({
+            "kind": "stream-count",
+            "count": total_streams,
+            "message": (
+                f"{total_streams} concurrent memory streams ({read_streams} read, {write_streams} write, "
+                f"{rmw_streams} rmw) exceed typical {max_streams}-stream L1D prefetcher tracking on {arch_key}; "
+                f"interleave or tile buffers to avoid hardware prefetcher thrashing"
+            ),
+        })
+    if alias_4k_streams:
+        b0, st0 = alias_4k_streams[0]
+        hints.append({
+            "kind": "stride-4k-alias",
+            "count": len(alias_4k_streams),
+            "message": (
+                f"stream `{b0}` advances by stride {st0} B (multiple of 4096 B), hitting 4 KiB store-forwarding "
+                f"aliasing and L1D set-associativity conflicts; pad stride by one {line_bytes}B cache line"
+            ),
+        })
+    return {
+        "read_streams": read_streams,
+        "write_streams": write_streams,
+        "rmw_streams": rmw_streams,
+        "total_streams": total_streams,
+        "read_bytes_per_iter": read_bytes,
+        "write_bytes_per_iter": write_bytes,
+        "est_lines_per_iter": est_lines,
+        "frame_lines_touched": len(frame_lines),
+        "streams": streams,
+    }, hints
+
+
 def _insn_load_bytes(it):
     """Exact byte width read by a single decoded memory-load instruction, or 0."""
     r = it["row"]
@@ -347,6 +631,9 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
             "row": row.name, "class": cls, "cost": cost,
             "reads": reads, "writes": writes, "jump": jtgt, "call": is_call,
             "uncond": is_uncond, "cond": is_cond, "ret": is_ret,
+            "mem_ops": _extract_mem_ops(row, bind),
+            "reg_delta": _extract_reg_delta(row, bind),
+            "addr_def": _extract_addr_def(row, bind),
         })
     whole_hints = []
     if target == "x86_64" and misaligned_vec_stack > 0:
@@ -490,6 +777,8 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
             load_widths = [_insn_load_bytes(x) for x in body]
             load_count = sum(1 for w in load_widths if w > 0)
             load_bytes = sum(load_widths)
+            locality, loc_hints = _analyze_locality(body, target, arch_key, line_bytes, arch["page_bytes"])
+            lints.extend(loc_hints)
             loops.append({
                 "start_pc": start_pc,
                 "end_pc": end_pc,
@@ -502,6 +791,7 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
                 "load_bytes": load_bytes,
                 "call_count": call_count,
                 "secondary_backedge": secondary_backedge,
+                "locality": locality,
                 "body": analyze_seq(body),
                 "pipeline_sim": sim_rep,
                 "critical_chain": crit_chain,
@@ -586,6 +876,22 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
         whole_sim = uica_sim.simulate_loop(parsed, arch_key, iterations=3)
         if all_archs:
             whole_all_archs = uica_sim.compare_all_archs(parsed, target, line_map=line_map, iterations=3)
+    whole_locality, whole_loc_hints = _analyze_locality(parsed, target, arch_key, line_bytes, arch["page_bytes"])
+    if not loops:
+        for h in whole_loc_hints:
+            if h["kind"] == "line-split":
+                whole_hints.append(h)
+    frame_sz = frame["size"] if frame else 0
+    memory_footprint = {
+        "frame_bytes": frame_sz,
+        "frame_cache_lines": math.ceil(frame_sz / line_bytes) if frame_sz else 0,
+        "frame_pages": math.ceil(frame_sz / arch["page_bytes"]) if frame_sz else 0,
+        "line_bytes": line_bytes,
+        "page_bytes": arch["page_bytes"],
+        "streams": whole_locality["total_streams"],
+        "read_bytes": whole_locality["read_bytes_per_iter"],
+        "write_bytes": whole_locality["write_bytes_per_iter"],
+    }
     return {
         "target": target,
         "arch": arch_key,
@@ -594,7 +900,8 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
         "page_bytes": arch["page_bytes"],
         "code_bytes": code_bytes,
         "icache_lines": icache_lines,
-        "frame_bytes": frame["size"] if frame else 0,
+        "frame_bytes": frame_sz,
+        "memory_footprint": memory_footprint,
         "whole": whole,
         "whole_sim": whole_sim,
         "whole_all_archs": whole_all_archs,
@@ -994,10 +1301,16 @@ def format_report(symbol, static_rep, mem_rep=None):
     lines = []
     w = static_rep["whole"]
     lines.append(f"advice for {symbol} ({static_rep['arch_name']}, target {static_rep['target']}):")
+    mf = static_rep.get("memory_footprint")
+    frame_note = ""
+    if static_rep["frame_bytes"]:
+        if mf:
+            frame_note = f", frame {mf['frame_bytes']} B ({mf['frame_cache_lines']} line(s), {mf['frame_pages']} page(s) @ {mf['page_bytes']} B)"
+        else:
+            frame_note = f", frame {static_rep['frame_bytes']} B"
     lines.append(
         f"  code:   {w['instructions']} instructions, {static_rep['code_bytes']} bytes, "
-        f"{static_rep['icache_lines']} i-cache line(s) ({static_rep['line_bytes']} B/line)"
-        + (f", frame {static_rep['frame_bytes']} B" if static_rep["frame_bytes"] else "")
+        f"{static_rep['icache_lines']} i-cache line(s) ({static_rep['line_bytes']} B/line){frame_note}"
     )
     lines.append(
         f"  static: compute lower bound >= {w['compute_lower_bound']:.1f} cyc "
@@ -1048,6 +1361,20 @@ def format_report(symbol, static_rep, mem_rep=None):
             f"{lb['instructions']} ins, {lp['bytes']} B, {lp['icache_lines']} i-cache line(s), "
             f">= {lb['compute_lower_bound']:.1f} cyc/iter ({lb['limiting']}){sim_note}{al_note}{sec_note}"
         )
+        loc = lp.get("locality")
+        if loc and (loc["total_streams"] or loc["read_bytes_per_iter"] or loc["write_bytes_per_iter"]):
+            pats = ", ".join(
+                f"{st['base']}({st['dir']},{st['pattern']}"
+                + (f",+{st['stride']}B" if st["stride"] else "")
+                + ")"
+                for st in loc["streams"][:6]
+            )
+            lines.append(
+                f"    locality: {loc['total_streams']} stream(s) ({loc['read_streams']}R/{loc['write_streams']}W/{loc['rmw_streams']}RW), "
+                f"{loc['read_bytes_per_iter']} B read + {loc['write_bytes_per_iter']} B write, "
+                f"~{loc['est_lines_per_iter']} line(s)/iter"
+                + (f" [{pats}]" if pats else "")
+            )
         cc = lp.get("critical_chain")
         if cc and cc["steps"] and sim_rep and sim_rep["bottleneck"] == "dependency":
             steps = cc["steps"]

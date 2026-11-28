@@ -2183,6 +2183,307 @@ fn f_stlf(out: 16 bytes, src: 16 bytes)
                 srep = est.static_analyze(rows, arch)
                 kinds = [ht["kind"] for ht in srep.get("hints") or []]
                 self.assertIn("stlf-width", kinds, f"expected stlf-width hint on {arch}, got {srep.get('hints')}")
+                # Phase 2 leaf x86-64 stack alignment check: `buf tmp[16]` must NOT emit `stack-align` warning!
+                self.assertNotIn("stack-align", kinds, f"unexpected stack-align warning on {arch}: {srep.get('hints')}")
+
+    def test_21_phase2_cache_line_alignment_disjointness_and_locality(self):
+        """Phase 2 cache-line & VM-page alignment, cache-line disjointness, and static locality metrics:
+        1. `requires aligned(buf, 64)` / `aligned(page, 4096)` canonicalization + `verify2.py` + `odeverify`
+           (`buf & 63 == 0` and `page & 4095 == 0` simplify without extra facts).
+        2. Call-site alignment & `line_disjoint` propagation (`128 B` -> `64 B`) and arena sub-slice
+           partitioning (`arena`, `arena + 64` accepted; `arena + 32` false-sharing refused) in BOTH
+           Lean 4 (`odeverify`) AND `verify2.py`.
+        3. `advice/estimate.py` static locality metrics: unit-stride stream detection, `memory_footprint`
+           cache lines / VM pages, `line-split` hint, and `stride-4k-alias` hint.
+        """
+        import ode_canon
+        import advice.estimate as est
+
+        # 1. `requires aligned(...)` + `requires line_disjoint(...)` canonicalization & dual verification
+        src_align_call = """\
+fn leaf_sum(a: n bytes, b: n bytes, n: u64) -> u64
+    requires n >= 1, n <= 64
+    requires aligned(a, 64)
+    requires line_disjoint(a, b, 64)
+    returns a[0] + b[0]
+    trace depends on n
+{
+    let x: u64 := a[0]
+    let y: u64 := b[0]
+    return x + y
+}
+
+fn caller_ok(p: n bytes, q: n bytes, n: u64) -> u64
+    requires n >= 1, n <= 64
+    requires aligned(p, 128)
+    requires line_disjoint(p, q, 128)
+    returns p[0] + q[0]
+    trace depends on n
+{
+    return leaf_sum(p, q, n)
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            res = _pack_and_dual_verify(src_align_call, "caller_ok", arch, check_v2=True)
+            self.assertIn("requires aligned(a0, 128)", res["canonical_ocl"])
+            self.assertIn("requires line_disjoint(a0, a1, 128)", res["canonical_ocl"])
+
+        # Negative control 1a: caller only guarantees 16-byte alignment, callee asks 64-byte -> REFUSED
+        src_align_bad = src_align_call.replace("requires aligned(p, 128)", "requires aligned(p, 16)")
+        for arch in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory(prefix="ode_albad_") as td:
+                sp = Path(td) / "albad.ode"
+                sp.write_text(src_align_bad, encoding="utf-8")
+                with self.assertRaises(ode_audit.PackProofError) as ctx:
+                    ode_audit.pack_verified(
+                        str(sp), None, str(Path(td) / "o.o"), str(Path(td) / "o.proof"),
+                        fn_name="caller_ok", target=arch, c_abi=True, stores=STD_STORES,
+                    )
+                self.assertIn("64-byte aligned", str(ctx.exception))
+
+        # Negative control 1b: caller omits `line_disjoint`, callee asks `line_disjoint(a, b, 64)` -> REFUSED
+        src_ld_bad = src_align_call.replace("requires line_disjoint(p, q, 128)\n", "")
+        for arch in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory(prefix="ode_ldbad_") as td:
+                sp = Path(td) / "ldbad.ode"
+                sp.write_text(src_ld_bad, encoding="utf-8")
+                with self.assertRaises(ode_audit.PackProofError) as ctx:
+                    ode_audit.pack_verified(
+                        str(sp), None, str(Path(td) / "o.o"), str(Path(td) / "o.proof"),
+                        fn_name="caller_ok", target=arch, c_abi=True, stores=STD_STORES,
+                    )
+                self.assertIn("64-byte cache-line disjoint", str(ctx.exception))
+
+        # 2. Machine-level arena sub-slice partitioning + alignment bitmask checks in BOTH Lean 4 AND verify2.py
+        import lean_verify, verify2
+        def _run_lean(st_path, pf_path):
+            r = subprocess.run([lean_verify.EXE, lean_verify.TABLE, st_path, pf_path], capture_output=True, text=True)
+            return r.returncode == 0, (r.stdout + r.stderr)
+
+        stmt_dir = tempfile.TemporaryDirectory(prefix="ode_p2_stmt_")
+        try:
+            td = Path(stmt_dir.name)
+            tab_x86 = lean_verify.TABLE
+            # 2a. `buf & 63 == 0` on 64-byte aligned buffer (`a: n bytes`)
+            stmt_mask = """\
+fn check_align
+arg buf bytes n
+arg n number
+align buf 64
+below n 1000
+atleast n 1
+returns (num 0)
+stack 0
+i 0 4 .mov 64 (.reg .rax) (.reg .rdi)
+i 4 8 .and 64 (.reg .rax) (.imm 63)
+i 8 9 .ret
+"""
+            pf_mask = "for check_align\n"
+            st_p, pf_p = str(td / "mask.s"), str(td / "mask.p")
+            Path(st_p).write_text(stmt_mask, encoding="utf-8")
+            Path(pf_p).write_text(pf_mask, encoding="utf-8")
+            ok_lean, out_lean = _run_lean(st_p, pf_p)
+            self.assertTrue(ok_lean, f"aligned mask Lean failed: {out_lean}")
+            verify2.verify_files(tab_x86, st_p, pf_p)
+
+            # 2b. Arena splitting (compiled ELF + full prove + Lean 4 verify on BOTH x86_64 and arm64!):
+            # `arena` (128 bytes, aligned 64) split at +64 -> `line_disjoint(a, b, 64)` SHOWN!
+            src_arena_ok = """\
+def sum_ab(h, a, b) {
+    [h[0] + a[0] + b[0], h[1] + a[1] + b[1], h[2] + a[2] + b[2], h[3] + a[3] + b[3]]
+}
+
+fn worker(out: 16 bytes, a: 64 bytes, b: 64 bytes)
+    requires no_overlap(out, a, b)
+    requires aligned(a, 64)
+    requires aligned(b, 64)
+    requires line_disjoint(a, b, 64)
+    ensures out = bytes_of(sum_ab(words(out), words(a[0 .. 16]), words(b[0 .. 16])))
+    trace depends on nothing
+{
+    let vh: u32x4 := out.u32x4(0)
+    let va: u32x4 := a.u32x4(0)
+    let vb: u32x4 := b.u32x4(0)
+    out.u32x4(0) := (vh +% va) +% vb
+}
+
+fn split_ok(out: 16 bytes, arena: 128 bytes)
+    requires no_overlap(out, arena)
+    requires aligned(arena, 64)
+    ensures out = bytes_of(sum_ab(words(out), words(arena[0 .. 16]), words(arena[64 .. 80])))
+    stack 16
+    trace depends on nothing
+for x86_64 needs avx {
+    movups xmm0, [rdi]
+    movups [rdi], xmm0
+    mov rdx, rsi
+    add rdx, 64
+    call worker
+    ret
+}
+for arm64 {
+    sub sp, sp, 16
+    str x30, [sp, 0]
+    ldr q0, [x0, 0]
+    str q0, [x0, 0]
+    add x2, x1, 64
+    bl worker
+    ldr x30, [sp, 0]
+    add sp, sp, 16
+    ret
+}
+"""
+            for arch in ("x86_64", "arm64"):
+                _pack_and_dual_verify(src_arena_ok, "split_ok", arch, check_v2=False)
+
+            # 2c. NEGATIVE CONTROL: splitting `arena` at +32 (no byte overlap, SAME 64B cache line!) -> REFUSED!
+            src_arena_fs = """\
+def sum_ab(h, a, b) {
+    [h[0] + a[0] + b[0], h[1] + a[1] + b[1], h[2] + a[2] + b[2], h[3] + a[3] + b[3]]
+}
+
+fn worker(out: 16 bytes, a: 32 bytes, b: 32 bytes)
+    requires no_overlap(out, a, b)
+    requires aligned(a, 64)
+    requires line_disjoint(a, b, 64)
+    ensures out = bytes_of(sum_ab(words(out), words(a[0 .. 16]), words(b[0 .. 16])))
+    trace depends on nothing
+{
+    let vh: u32x4 := out.u32x4(0)
+    let va: u32x4 := a.u32x4(0)
+    let vb: u32x4 := b.u32x4(0)
+    out.u32x4(0) := (vh +% va) +% vb
+}
+
+fn split_fs(out: 16 bytes, arena: 128 bytes)
+    requires no_overlap(out, arena)
+    requires aligned(arena, 64)
+    ensures out = bytes_of(sum_ab(words(out), words(arena[0 .. 16]), words(arena[32 .. 48])))
+    stack 16
+    trace depends on nothing
+for x86_64 needs avx {
+    movups xmm0, [rdi]
+    movups [rdi], xmm0
+    mov rdx, rsi
+    add rdx, 32
+    call worker
+    ret
+}
+for arm64 {
+    sub sp, sp, 16
+    str x30, [sp, 0]
+    ldr q0, [x0, 0]
+    str q0, [x0, 0]
+    add x2, x1, 32
+    bl worker
+    ldr x30, [sp, 0]
+    add sp, sp, 16
+    ret
+}
+"""
+            for arch in ("x86_64", "arm64"):
+                sp_fs = td / f"fs_{arch}.ode"
+                sp_fs.write_text(src_arena_fs, encoding="utf-8")
+                with self.assertRaises(ode_audit.PackProofError) as ctx_fs:
+                    ode_audit.pack_verified(
+                        str(sp_fs), None, str(td / f"fs_{arch}.o"), str(td / f"fs_{arch}.proof"),
+                        fn_name="split_fs", target=arch, c_abi=True, stores=STD_STORES,
+                    )
+                self.assertIn("64-byte cache-line disjoint", str(ctx_fs.exception))
+
+            # 2d. Also verify `verify2.py` independently refuses false sharing at +32 on raw statement/proof!
+            stmt_fs_raw = """\
+fn worker
+arg a fixed 32
+arg b fixed 32
+align a 64
+linedisjoint a b 64
+returns (num 0)
+stack 0
+i 0 4 .mov 64 (.reg .rax) (.imm 0)
+i 4 5 .ret
+
+fn split_fs
+arg arena fixed 128
+align arena 64
+returns (num 0)
+stack 8
+i 0 4 .mov 64 (.reg .rsi) (.reg .rdi)
+i 4 8 .add 64 (.reg .rsi) (.imm 32)
+i 8 13 .call worker
+i 13 14 .ret
+"""
+            st_fs, pf_fs = str(td / "fs_raw.s"), str(td / "fs_raw.p")
+            Path(st_fs).write_text(stmt_fs_raw, encoding="utf-8")
+            Path(pf_fs).write_text("for worker\nfor split_fs\n", encoding="utf-8")
+            with self.assertRaises(verify2.Refuse) as ctx_v2:
+                verify2.verify_files(tab_x86, st_fs, pf_fs)
+            self.assertIn("64-byte cache-line disjoint", str(ctx_v2.exception))
+        finally:
+            stmt_dir.cleanup()
+
+        # 3. `advice/estimate.py` static locality: unit-stride loop stream + line-split + stride-4k-alias
+        src_loop = """\
+def sum_u8(bs, n) {
+    if n == 0 then 0 else sum_u8(bs, n - 1) + bs[n - 1]
+}
+
+fn scan_u8(src: n bytes, n: u64) -> u64
+    requires n <= 4096
+    returns sum_u8(src, n)
+    trace depends on n
+{
+    var i: u64 := 0
+    var acc: u64 := 0
+    while i < n
+        maintains 0 <= i, i <= n, acc == sum_u8(src, i), acc <= 255 * i
+        decreases n - i
+    {
+        acc += src[i]
+        i += 1
+    }
+    return acc
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory(prefix="ode_loc_") as td:
+                sp = Path(td) / "loc.ode"
+                sp.write_text(src_loop, encoding="utf-8")
+                oo, op = str(Path(td) / "loc.o"), str(Path(td) / "loc.proof")
+                res = ode_audit.pack_verified(
+                    str(sp), None, oo, op, fn_name="scan_u8", target=arch, c_abi=True, stores=STD_STORES,
+                )
+                self.assertEqual(res["verdict"], "shown")
+                _, rows = est.decode_object(oo, res["symbol"], arch)
+                srep = est.static_analyze(rows, arch)
+                self.assertIn("memory_footprint", srep)
+                self.assertTrue(len(srep["loops"]) >= 1)
+                loc = srep["loops"][0]["locality"]
+                self.assertGreaterEqual(loc["read_streams"], 1)
+                self.assertEqual(loc["read_bytes_per_iter"], 1)
+                self.assertEqual(loc["streams"][0]["pattern"], "unit")
+                self.assertEqual(loc["streams"][0]["stride"], 1)
+                rep_txt = est.format_report("scan_u8", srep)
+                self.assertIn("locality:", rep_txt)
+
+        # 3b. Synthetic decoded x86-64 checks for `line-split` (16B load at [rsi+56]) and `stride-4k-alias` (add rsi, 4096)
+        dec_split = [
+            (0, 5, ".xloadu 0 .rsi 56"),
+            (5, 9, ".xstoreu .rdi 0 0"),
+            (9, 10, ".ret"),
+        ]
+        rep_sp = est.static_analyze(dec_split, "x86_64", "zen5")
+        self.assertIn("line-split", [h["kind"] for h in rep_sp["hints"]])
+
+        dec_4k = [
+            (0, 3, ".mov 64 (.reg .rax) (.mem .rsi 0)"),
+            (3, 10, ".add 64 (.reg .rsi) (.imm 4096)"),
+            (10, 14, ".sub 64 (.reg .rdx) (.imm 1)"),
+            (14, 16, ".jne 0"),
+            (16, 17, ".ret"),
+        ]
+        rep_4k = est.static_analyze(dec_4k, "x86_64", "zen5")
+        self.assertIn("stride-4k-alias", [h["kind"] for h in rep_4k["loops"][0]["lints"]])
 
 
 if __name__ == "__main__":

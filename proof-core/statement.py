@@ -677,12 +677,35 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}, is_arm64=False):
         else:
             raise SystemExit(f"statement: the contract of {name} has a `decreases` line the verifier in Lean does not read yet")
     # What is written is taken to overlap nothing else given (the account in Lean asks it of the caller), so the
-    # contract must ask it of the caller too: `requires no_overlap` of every address among the arguments.
+    # contract must ask it of the caller too: `requires no_overlap` (or `requires line_disjoint`) of every address among the arguments.
     addresses = [arg for arg, kind in c["args"] if not in_register(arg)]
+    ld_clauses = c.get("line_disjoint") or []
+    ld_covers_all = any(sorted(bufs) == sorted(addresses) for bufs, _ in ld_clauses)
     if written and len(addresses) > 1:
-        if sorted(c["no_overlap"] or []) != sorted(addresses):
+        if sorted(c["no_overlap"] or []) != sorted(addresses) and not ld_covers_all:
             raise SystemExit(f"statement: the contract of {name} does not say `requires no_overlap({', '.join(addresses)})`: what it writes is taken to overlap nothing else it is given")
     elif c["no_overlap"]: raise SystemExit(f"statement: the contract of {name} has `requires no_overlap`, which the verifier in Lean reads only with something written")
+    for aname, al in (c.get("aligns") or []):
+        if aname not in addresses:
+            raise SystemExit(f"statement: the contract of {name} has `requires aligned({aname}, {al})`, but `{aname}` is not a buffer parameter")
+        if al not in (8, 16, 32, 64, 128, 4096, 16384):
+            raise SystemExit(f"statement: the contract of {name} has invalid alignment {al} for `{aname}`")
+        out.append(f"align {aname} {al}")
+    seen_ld = set()
+    for bufs, line_sz in ld_clauses:
+        if line_sz not in (64, 128):
+            raise SystemExit(f"statement: the contract of {name} has invalid `line_disjoint` line size {line_sz}")
+        if len(set(bufs)) != len(bufs):
+            raise SystemExit(f"statement: the contract of {name} lists a buffer twice in `requires line_disjoint(...)`")
+        for b in bufs:
+            if b not in addresses:
+                raise SystemExit(f"statement: the contract of {name} has `requires line_disjoint(...)` naming `{b}`, which is not a buffer parameter")
+        for i in range(len(bufs)):
+            for j in range(i + 1, len(bufs)):
+                pair = (bufs[i], bufs[j], line_sz)
+                if pair not in seen_ld:
+                    seen_ld.add(pair)
+                    out.append(f"linedisjoint {bufs[i]} {bufs[j]} {line_sz}")
     # A contract promises that which instructions run and which addresses are touched depend on nothing it is
     # given, but for what a `trace depends on` line names: not on the bytes of a run, and not on a number in a
     # register. In the account in Lean the bytes of a run given to read are not marked (nothing secret), but

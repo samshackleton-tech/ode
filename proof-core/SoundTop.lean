@@ -3230,6 +3230,25 @@ theorem forResult_valArrays (c : Contract) (rh : List String) :
       | cons r rs => cases k <;> simp only [valArraysIn, forResult_regOf, ih]
   exact go c.args _
 
+theorem forResult_bufSpan (c : Contract) (rh : List String) (s : State) (name : String) :
+    (c.forResult rh).bufSpan s name = c.bufSpan s name := by
+  unfold Contract.bufSpan
+  rw [forResult_argRegs]
+  have go : ∀ args regs, bufSpanIn (c.forResult rh) s.reg name args regs = bufSpanIn c s.reg name args regs := by
+    intro args regs
+    induction args generalizing regs with
+    | nil => rfl
+    | cons a more ih =>
+      obtain ⟨n, k⟩ := a
+      cases regs with
+      | nil => rfl
+      | cons r rs =>
+        simp only [bufSpanIn]
+        split
+        · cases k <;> simp only [forResult_regOf]
+        · exact ih rs
+  exact go c.args _
+
 theorem forResult_pre (c : Contract) (rh : List String) (p : Program) (s : State) :
     (c.forResult rh).pre p s ↔ c.pre p s := by
   unfold Contract.pre
@@ -3237,7 +3256,9 @@ theorem forResult_pre (c : Contract) (rh : List String) (p : Program) (s : State
   have h2 : (c.forResult rh).fixeds = c.fixeds := rfl
   have h3 : (c.forResult rh).slot = c.slot := rfl
   have h4 : (c.forResult rh).preLines = c.preLines := rfl
-  simp only [forResult_regions, forResult_regOf, forResult_tableAt, forResult_stackAt, forResult_preLineVal, forResult_valArrays, h1, h2, h3, h4]
+  have h5 : (c.forResult rh).aligns = c.aligns := rfl
+  have h6 : (c.forResult rh).lineDisjoint = c.lineDisjoint := rfl
+  simp only [forResult_regions, forResult_regOf, forResult_tableAt, forResult_stackAt, forResult_preLineVal, forResult_valArrays, forResult_bufSpan, h1, h2, h3, h4, h5, h6]
   rfl
 
 theorem forResult_clear (c : Contract) (rh : List String) (world : List Program) (pieces : List Piece) (s : State) :
