@@ -1808,6 +1808,38 @@ fn run_tail(pkt: n bytes, n: number) -> u64
             self.assertEqual(r_bad["verdict"], "refused", r_bad)
             self.assertIn("unknown verifier", r_bad["errors"][0])
 
+    def test_21_zero_legacy_p_proofs_and_factory_dual_verify(self):
+        """Every kept .proof file in the repo uses order-independent `r ...` proofs (0 legacy `p ...`),
+        and all 38/38 factory/verified/ artifacts pass standalone pure-Python `verify2.py`."""
+        import glob
+        for pat in (
+            os.path.join(HERE, "proofs", "*.proof"),
+            os.path.join(HERE, "examples", "**", "*.proof"),
+            os.path.join(ROOT, "factory", "verified", "*.proof"),
+        ):
+            for path in sorted(glob.glob(pat, recursive=True)):
+                with open(path, "r", encoding="utf-8") as f:
+                    legacy = [ln for ln in f if ln.startswith("p ")]
+                self.assertEqual(
+                    len(legacy), 0,
+                    f"{path} still has {len(legacy)} legacy positional `p ...` proofs",
+                )
+        fac_dir = os.path.join(ROOT, "factory", "verified")
+        pfiles = sorted(glob.glob(os.path.join(fac_dir, "*.proof")))
+        self.assertGreaterEqual(len(pfiles), 38)
+        x86_rows = verify2.tab_mod.read(os.path.join(ROOT, "core", "x86.tab"))
+        arm_rows = verify2.tab_mod.read(os.path.join(ROOT, "arm64", "arm64.tab"))
+        for pf_path in pfiles:
+            st_path = pf_path[:-6] + ".statement"
+            self.assertTrue(os.path.exists(st_path), st_path)
+            fns, defs = verify2.parse_statement(st_path)
+            prfs = verify2.parse_proof(pf_path)
+            rows = arm_rows if fns and fns[0]["machine"] == "arm64" else x86_rows
+            proven = {}
+            v = verify2.Verifier(rows, defs, proven)
+            for fn in fns:
+                v.verify_fn(fn, prfs[fn["name"]])
+
 
 def _run_one_test(test_name):
     import io, time
