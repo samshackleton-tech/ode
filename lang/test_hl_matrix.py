@@ -26,7 +26,7 @@ from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-for d in (HERE, os.path.join(ROOT, "proof-core"), os.path.join(ROOT, "kcheck"),
+for d in (ROOT, HERE, os.path.join(ROOT, "proof-core"), os.path.join(ROOT, "kcheck"),
           os.path.join(ROOT, "core"), os.path.join(ROOT, "arm64"),
           os.path.join(ROOT, "advice"), os.path.join(ROOT, "paper", "EXPERIMENTS")):
     if d not in sys.path:
