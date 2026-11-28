@@ -355,7 +355,7 @@ A machine address carries no length and no owner. Without explicit bounds, a cal
 #with_note([
   Adjacent pieces whose byte intervals touch at an endpoint (such as `[0, 32)` and `[32, 96)`) have no byte in common and satisfy `no_overlap`.
 ])[
-  A function may read any piece passed to it, and may write only pieces named in `ensures` (which states the final value) or `writes` (which grants write permission without fixing a single final formula). `requires no_overlap(block, src)` obliges the caller to pass disjoint memory intervals.
+  A function may read any piece passed to it, and may write only pieces named in `ensures` (which states the final value) or `writes` (which grants write permission without fixing a single final formula). `requires disjoint(block, src, 1)` obliges the caller to pass disjoint memory intervals.
 ]
 
 A caller _lends_ whole pieces or sub-slices to its callees—for example, lending bytes `[32, 96)` of a 120-byte `node120` record as `block` (Figure 3). A caller can lend no bytes it does not hold, and cannot lend a read-only piece as writable. After the call returns, the caller knows `ensures` for the lent slice and retains every prior fact about the untouched bytes.

@@ -181,7 +181,7 @@ fn v_tag_kind(buf: n bytes, n: number)
 
 // 8. `Arithmetic.sum` on 16-word (64-byte cache-line-aligned) coefficient rows.
 fn v_row_sum16(out: 64 bytes, a: 64 bytes, b: 64 bytes)
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     requires aligned(out, 64), aligned(a, 64), aligned(b, 64)
     ensures out = bytes_of(sum16(words(a), words(b)))
     stack 0

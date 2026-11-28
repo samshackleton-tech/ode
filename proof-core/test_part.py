@@ -25,7 +25,7 @@ import built, lean_verify, odec, prove, statement
 PART = os.path.join(HERE, "examples", "part")
 NAME, SSE41 = "ode_second_block", "blake3_servil_compress_in_place_sse41"
 FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), SSE41), (os.path.join(PART, "odepart.o"), NAME)]
-CONTRACT = ["arg h inout 32", "arg input bytes len", "arg len number", "needs sse41", "atleast len 128", "hidden input", "hidden len",
+CONTRACT = ["arg h inout 32", "arg input bytes len", "arg len number", "needs sse41", "atleast len 128", "disjoint h input 1", "hidden input", "hidden len",
             "ensuresw h (call bytes_of (call compress (call words (name h)) (call words (slice (name input) (num 64) (num 128))) "
             "(call counter (num 0)) (num 64) (num 0)))",
             "stack 64"]

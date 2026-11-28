@@ -37,7 +37,7 @@ NAME, P16 = "ode_quad", "blake3_servil_avx512_p16"
 FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), P16), (os.path.join(QUAD, "odequad.o"), NAME)]
 COMPRESS = ("(call compress (call words (slice (name kf) (num 0) (num 32))) (call words (name {})) (call counter (num 0)) (num 64) "
             "(bin | (call number.le (slice (name kf) (num 32) (num 40))) (call PARENT)))")
-CONTRACT = ["arg out inout 32", "arg a fixed 64", "arg b fixed 64", "arg kf fixed 40", "mbelow kf 32 256", "needs avx512", "hidden a", "hidden b", "hidden kf",
+CONTRACT = ["arg out inout 32", "arg a fixed 64", "arg b fixed 64", "arg kf fixed 40", "mbelow kf 32 256", "needs avx512", "disjoint out a 1", "disjoint out b 1", "disjoint out kf 1", "disjoint a b 1", "disjoint a kf 1", "disjoint b kf 1", "hidden a", "hidden b", "hidden kf",
             "ensuresw out (call bytes_of (call parent (call words (slice (name kf) (num 0) (num 32))) (call number.le (slice (name kf) (num 32) (num 40))) "
             + COMPRESS.format("a") + " " + COMPRESS.format("b") + "))",
             "stack 5280"]

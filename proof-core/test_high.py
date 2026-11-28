@@ -33,7 +33,7 @@ import built, lean_verify, odec, prove, statement
 HIGH = os.path.join(HERE, "examples", "high")
 NAME, SSE41 = "ode_high", "blake3_servil_compress_in_place_sse41"
 FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), SSE41), (os.path.join(HIGH, "odehigh.o"), NAME)]
-CONTRACT = ["arg out inout 32", "arg m fixed 64", "arg kf fixed 40", "mbelow kf 32 256", "needs sse41", "hidden m", "hidden kf",
+CONTRACT = ["arg out inout 32", "arg m fixed 64", "arg kf fixed 40", "mbelow kf 32 256", "needs sse41", "disjoint out m 1", "disjoint out kf 1", "disjoint m kf 1", "hidden m", "hidden kf",
             "ensuresw out (call bytes_of (call compress (call words (slice (name kf) (num 0) (num 32))) (call words (name m)) "
             "(call counter (num 0)) (num 64) (bin | (call number.le (slice (name kf) (num 32) (num 40))) (call PARENT))))",
             "stack 64"]
@@ -123,9 +123,9 @@ class Statement(unittest.TestCase):
         definition it is. An argument of that name would be the argument."""
         lines = statement.statement(spec_text(), FUNCTIONS)
         self.assertIn("def PARENT = (num 4)", lines)
-        self.assertIn("(call PARENT)", CONTRACT[7])
+        self.assertIn("(call PARENT)", CONTRACT[10])
         renamed = lambda t: once("contract ode_high(out: cv, m: block, kf: keyed)", "contract ode_high(out: cv, PARENT: block, kf: keyed)")(
-            once("requires no_overlap(out, m, kf)", "requires no_overlap(out, PARENT, kf)")(once("compress(kf.key, m, ", "compress(kf.key, PARENT, ")(t)))
+            once("requires disjoint(out, m, kf, 1)", "requires disjoint(out, PARENT, kf, 1)")(once("compress(kf.key, m, ", "compress(kf.key, PARENT, ")(t)))
         lines = statement.statement(spec_text(renamed), FUNCTIONS)
         ensures = [l for l in lines[lines.index(f"fn {NAME}"):] if l.startswith("ensuresw out ")][0]
         self.assertIn("(call words (name PARENT))", ensures)

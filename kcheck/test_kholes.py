@@ -266,7 +266,7 @@ class Proof(unittest.TestCase):
         with open(os.path.join(HERE, "programs", "frame", "odeframe.o"), "rb") as f: pass
         frame = os.path.join(HERE, "programs", "frame", "odeframe.o")
         with open(os.path.join(HERE, "programs", "frame", "frame.spec")) as f: spec = f.read()
-        extra = spec + "\ncontract ode_absent(out: 32 bytes, n: number) {\n    requires no_overlap(out)\n    returns n\n    stack 0\n}\n"
+        extra = spec + "\ncontract ode_absent(out: 32 bytes, n: number) {\n    returns n\n    stack 0\n}\n"
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "two.spec")
             with open(path, "w") as f: f.write(extra)
@@ -342,7 +342,7 @@ class CallMemory(unittest.TestCase):
         address, the call is refused."""
         self.with_inner("""
 contract b3l_twice(p: cv, h: cv) {
-    requires no_overlap(p, h)
+    requires disjoint(p, h, 1)
     ensures h = h
     stack 16
     needs sse41

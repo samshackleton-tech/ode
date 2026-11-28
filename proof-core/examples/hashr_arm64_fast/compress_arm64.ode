@@ -1,5 +1,5 @@
 // One-block BLAKE3 compression for AArch64 NEON (unified `.ode` with linked local namespace).
-use b3 = "ya6gqve7vxwsty67gvln6hr4lxkvo2vmknwk4l3prxrvtmuetiqq"  // blake3_spec.ode
+use b3 = "2foz4xsr64wppbos355toq2edgzfhdhbtzyfj4lkgx62cvcfbrpq"  // blake3_spec.ode
 
 // BLAKE3 one-block NEON compression kernel on AArch64, written in higher-level Ode.
 // Verified in Lean 4 directly against kcheck/blake3.spec's `compress(h, m, t, length, flags)`:
@@ -53,7 +53,7 @@ inline fn permute_msg for arm64 (m0: vec, m1: vec, m2: vec, m3: vec, t0: vec, t1
 }
 
 fn compress1(h: cv, m: block, length: word, t: counter, flags: low word)
-    requires no_overlap(h, m)
+    requires disjoint(h, m, 1)
     ensures h = b3.compress(h, m, t, length, flags)
     stack 0
 {

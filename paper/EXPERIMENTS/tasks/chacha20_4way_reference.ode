@@ -78,7 +78,7 @@ inline fn qr4_quad(
 }
 
 fn chacha20_4way(out: 256 bytes, st: 256 bytes)
-    requires no_overlap(out, st)
+    requires disjoint(out, st, 1)
     ensures out = bytes_of(spec.chacha20_4way(words(st)))
     stack 256
 for x86_64 needs avx needs avx512 {

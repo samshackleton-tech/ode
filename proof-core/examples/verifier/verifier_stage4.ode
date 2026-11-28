@@ -340,12 +340,12 @@ fn v_verify_rsq_unit_cert(rows: n bytes, n: number, steps: m bytes, m: number, n
 def comb22_16(a, b) { [(a[i] + b[i]) + (a[i] + b[i]) for i in 0..16] }
 
 fn v_row_2a_plus_2b16(out: 64 bytes, a: 64 bytes, b: 64 bytes)
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     requires aligned(out, 64)
     requires aligned(a, 64)
     requires aligned(b, 64)
-    requires line_disjoint(out, a)
-    requires line_disjoint(out, b)
+    requires disjoint(out, a, 64)
+    requires disjoint(out, b, 64)
     ensures out = bytes_of(comb22_16(words(a), words(b)))
     stack 0
 {

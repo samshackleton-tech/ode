@@ -69,6 +69,9 @@ LINES = [
     "needs avx512",
     "atleast n 1",
     "below n 2",
+    "disjoint inputs key 1",
+    "disjoint inputs out 1",
+    "disjoint key out 1",
     "hidden key",
     "hidden t",
     "hidden packed",
@@ -138,7 +141,7 @@ class Statement(unittest.TestCase):
             ("the values from 1 on", once("inputs[i]) for i in 0..16", "inputs[i]) for i in 1..16"), "not of all of them"),
             ("a bound that is no number", once(AT_LEAST, "    requires n >= t\n"), "has a `requires` the verifier in Lean does not read yet"),
             ("a bound of a run", once(AT_LEAST, "    requires key >= 1\n"), "has a `requires` the verifier in Lean does not read yet"),
-            ("no line of what overlaps", once("    requires no_overlap(inputs, key, out)\n", ""), "does not say `requires no_overlap(inputs, key, out)`"),
+            ("no line of what overlaps", once("    requires disjoint(inputs, key, out, 1)\n", ""), "does not say `requires disjoint(inputs, key, out, 1)`"),
         ]
         for what, change, why in cases:
             with self.subTest(what=what):

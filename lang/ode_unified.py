@@ -208,12 +208,12 @@ def _dedent_body(body_text, body_start_line):
 
 
 def _expand_comma_requires(clauses_text):
-    """Allow comma-separated `requires a <= b, b <= c` (splitting only at top-level commas, never `no_overlap`)."""
+    """Allow comma-separated `requires a <= b, b <= c` (splitting only at top-level commas, never inside `(...)`)."""
     out = []
     for raw in clauses_text.splitlines():
         code = _strip_line_comment(raw)
         s = code.strip()
-        if s.startswith("requires ") and not s.startswith("requires no_overlap"):
+        if s.startswith("requires "):
             rest = s[len("requires "):]
             parts, cur, depth = [], [], 0
             for ch in rest:

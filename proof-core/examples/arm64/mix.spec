@@ -10,19 +10,19 @@ def mix16_chain_3(d, a) {
 }
 
 contract arm_mix16_3(out: block, d: block, a: block) {
-    requires no_overlap(out, d, a)
+    requires disjoint(out, d, a, 1)
     ensures out = mix16_chain_3(d, a)
     stack 0
 }
 
 contract arm_mix16_again(out: block, d: block, a: block) {
-    requires no_overlap(out, d, a)
+    requires disjoint(out, d, a, 1)
     ensures out = mix16_chain_3(d, a)
     stack 16
 }
 
 contract arm_mix16_6(out: block, d: block, a: block) {
-    requires no_overlap(out, d, a)
+    requires disjoint(out, d, a, 1)
     ensures out = mix16_chain_3(mix16_chain_3(d, a), a)
     stack 96
 }

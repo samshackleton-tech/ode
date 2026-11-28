@@ -69,7 +69,7 @@ SOURCES = [
 # Changed contracts that are still true: (what is changed, the text as it is, the text changed).
 STILL_TRUE = [
     ("the stack is said to be 120 bytes", "stack 112", "stack 120"),
-    ("what can be observed may depend on a", "    requires no_overlap(out, a, b)\n", "    requires no_overlap(out, a, b)\n    trace depends on a\n"),
+    ("what can be observed may depend on a", "    requires disjoint(out, a, b, 1)\n", "    requires disjoint(out, a, b, 1)\n    trace depends on a\n"),
 ]
 # Changed functions that still meet the contract: (what is changed, [(as it is, changed, how often)]).
 SOURCES_STILL_TRUE = [
@@ -117,7 +117,7 @@ class Statement(unittest.TestCase):
         at = lines.index(f"fn {NAME}")
         self.assertGreater(at, lines.index(f"fn {SSE41}"))                      # after the function it calls
         mine = [l for l in lines[at + 1:] if not l.startswith(("i ", "def "))]
-        self.assertEqual(mine[:6], ["arg out inout 32", "arg a fixed 64", "arg b fixed 64", "needs sse41", "hidden a", "hidden b"])
+        self.assertEqual(mine[:9], ["arg out inout 32", "arg a fixed 64", "arg b fixed 64", "needs sse41", "disjoint out a 1", "disjoint out b 1", "disjoint a b 1", "hidden a", "hidden b"])
         self.assertEqual(mine[-1], "stack 112")
         self.assertEqual(len([l for l in lines[at + 1:] if l.startswith("i ")]), 46)
 

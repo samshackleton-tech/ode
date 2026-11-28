@@ -886,7 +886,7 @@ fn helper(c: number)
 }
 
 fn copy_bump(out: 8 bytes, src: n bytes, n: number)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     requires n >= 8
     requires n <= 8
     ensures out = out_list(src)

@@ -61,7 +61,7 @@ def chacha20_blocks4(s) {
 }
 
 contract ode_chacha20_blocks4_arm64(out: 256 bytes, state: 64 bytes) {
-    requires no_overlap(out, state)
+    requires disjoint(out, state, 1)
     ensures out = bytes_of(chacha20_blocks4(words(state)))
     stack 48
 }

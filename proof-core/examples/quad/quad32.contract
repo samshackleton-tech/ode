@@ -5,7 +5,7 @@
 layout keyed 40 { key: cv at 0, flags: byte at 32 }
 
 contract ode_quad32(out: cv, a: block, b: block, kf: keyed) {
-    requires no_overlap(out, a, b, kf)
+    requires disjoint(out, a, b, kf, 1)
     ensures out = parent(kf.key, kf.flags, compress(kf.key, a, counter(0), 64, kf.flags | PARENT), compress(kf.key, b, counter(0), 64, kf.flags | PARENT))
     stack 6432
     needs avx512

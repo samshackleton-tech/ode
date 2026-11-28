@@ -355,7 +355,7 @@ class FullAArch64Hash(unittest.TestCase):
              once("stack 1120 + 272 * bits(len / 1024)",
                   "stack 1104 + 272 * bits(len / 1024)")),
             ("b3l_hashr_arm64", "drop no_overlap",
-             once("contract b3l_hashr_arm64(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte) {\n    requires no_overlap(out, input, key)\n",
+             once("contract b3l_hashr_arm64(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte) {\n    requires disjoint(out, input, key, 1)\n",
                   "contract b3l_hashr_arm64(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte) {\n")),
             ("b3l_subtree_arm64", "drop decreases len",
              once("    decreases len\n", "")),
@@ -365,7 +365,7 @@ class FullAArch64Hash(unittest.TestCase):
              once("stack 816 + 272 * bits((len - 1) / 1024)",
                   "stack 816 + 256 * bits((len - 1) / 1024)")),
             ("b3l_node_out_arm64", "drop no_overlap",
-             once("    requires no_overlap(out, nd)\n", "")),
+             once("    requires disjoint(out, nd, 1)\n", "")),
         ]
         for target, what, change in cases:
             with self.subTest(target=target, what=what):

@@ -1,7 +1,7 @@
 use spec = "wcnemo3me6sc6h3bhpmf643xiljll7sxguyi3eyguff6p36gx6yq"  // sha256_4way_spec.ode
 
 fn sha256_4way(out: 128 bytes, state: 128 bytes, blocks: 256 bytes, k: 256 bytes)
-    requires no_overlap(out, state, blocks, k)
+    requires disjoint(out, state, blocks, k, 1)
     ensures out = bytes_of(spec.sha256_4way(words(state), words(blocks), words(k)))
     stack 512
 {

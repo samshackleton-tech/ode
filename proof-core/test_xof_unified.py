@@ -32,7 +32,7 @@ ARM_MACHINE = platform.machine() in ("arm64", "aarch64")
 CC = shutil.which("clang") or shutil.which("cc")
 SRC = os.path.join(HASHER, "xof_unified.ode")
 STORES = (os.path.join(HERE, "examples", "hashr_arm64_fast"),)
-CONTRACT_B32 = "mploeb55ucqzcztg4qz26czekw5lccs2le5m2pdmjccoz4e24ala"
+CONTRACT_B32 = "2v2aqim2fioddfbyx53eutgpnbk3463zm4i5nzzjxj3tqlmgv32a"
 
 # Official BLAKE3 XOF output (first 64 bytes = counter 0, next 64 bytes = counter 1) for empty input:
 WANT_EMPTY_T0 = (

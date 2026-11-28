@@ -140,7 +140,7 @@ def inc_bytes(src) {
 }
 
 fn hl_inc_copy(out: 64 bytes, src: n bytes, n: u64) -> u64
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     requires 64 <= n, n <= 64
     ensures out = inc_bytes(src)
     returns 1
@@ -336,7 +336,7 @@ def arx1(w) {
 }
 
 fn hl_vec_add(out: 16 bytes, inp: 32 bytes)
-    requires no_overlap(out, inp)
+    requires disjoint(out, inp, 1)
     ensures out = bytes_of(arx1(words(inp)))
     stack 0
 {
@@ -376,7 +376,7 @@ def arx12(w) {
 }
 
 fn hl_rotl_nested(out: 16 bytes, inp: 32 bytes)
-    requires no_overlap(out, inp)
+    requires disjoint(out, inp, 1)
     ensures out = bytes_of(arx12(words(inp)))
 {
     for x86_64 needs avx {
@@ -476,7 +476,7 @@ def zip32_words(w) {
 }
 
 fn hl_zip_demo(out: 32 bytes, src: 32 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = bytes_of(zip32_words(words(src)))
     stack 0
 for x86_64 needs avx {
@@ -575,7 +575,7 @@ def copy_inc(src) {
 
 fn hl_bad_copy(src: n bytes, out: 16 bytes, n: number) -> u64
     requires n >= 16, n <= 16
-    requires no_overlap(src, out)
+    requires disjoint(src, out, 1)
     returns 0
     ensures out = copy_inc(src)
     trace depends on n
@@ -656,7 +656,7 @@ inline fn add_sig1(var acc: u32x4, e: u32x4) {
 }
 
 fn hl_sha256_big_sigma_4x(out: 16 bytes, a: 16 bytes, e: 16 bytes)
-    requires no_overlap(out, a, e)
+    requires disjoint(out, a, e, 1)
     ensures out = bytes_of(big_sigma_4x(words(a), words(e)))
     stack 0
 for x86_64 needs avx {
@@ -741,7 +741,7 @@ inline fn perm_arm(var m0: u32x4, var m1: u32x4, var m2: u32x4, var m3: u32x4) {
 }
 
 fn hl_b3_compress1(h: cv, m: block, length: word, t: counter, flags: low word)
-    requires no_overlap(h, m)
+    requires disjoint(h, m, 1)
     ensures h = b3.compress(h, m, t, length, flags)
     stack 0
 for x86_64 needs avx needs avx512 {
@@ -860,7 +860,7 @@ def pack_triples_spec(inp) {
 
 fn pack_triples(inp: n bytes, n: u64, out: 12 bytes) -> u64
     requires n == 16
-    requires no_overlap(inp, out)
+    requires disjoint(inp, out, 1)
     ensures out = pack_triples_spec(inp)
     returns 1
     trace depends on n
@@ -931,7 +931,7 @@ def add4_w(a, b) {
 }
 
 fn add_vec4(out: 16 bytes, a: 16 bytes, b: 16 bytes)
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     ensures out = bytes_of(add4_w(words(a), words(b)))
     trace depends on nothing
 {

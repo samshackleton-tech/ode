@@ -28,7 +28,7 @@ def chacha_qr(s) {
 }
 
 contract ode_chacha20_qround_4x(out: block, state: block) {
-    requires no_overlap(out, state)
+    requires disjoint(out, state, 1)
     ensures out = chacha_qr(state)
     stack 0
 }

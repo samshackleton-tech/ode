@@ -3,7 +3,7 @@
 def zero_cv() { [word(0) for i in 0..8] }
 
 contract ode_parent(out: cv, a: block, b: block) {
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     ensures out = compress(out, compress(zero_cv(), a, counter(0), 64, 0) ++ compress(zero_cv(), b, counter(0), 64, 0), counter(0), 64, 0)
     stack 96
     needs sse41

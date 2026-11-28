@@ -5262,20 +5262,85 @@ def subSpanOf (ctx : Ctx) (s : Sym) (b l : Row) (name : String) : Bool :=
     plain s.facts (Lin.sub b bu) && plain s.facts (Lin.sub (Lin.add bu lu) (Lin.add b l))
   | none => false
 
-/-- Check that two symbolic extents `[bx, bx + lx)` and `[by_, by_ + ly)` are cache-line disjoint at line
-size `L > 0`: either one has length 0, or they are separated by an `L`-aligned boundary (`bx + lx ≤ by_`
-with `by_ % L = 0`, or symmetrically), or they are sub-spans of caller buffers already `lineDisjoint` at
-a multiple `L'` of `L`. -/
-def lineDisjointPairOk (ctx : Ctx) (s : Sym) (bx lx by_ ly : Row) (L : Nat) : Bool :=
+/-- Check that `[b, b + l)` lies inside this function's stack frame `[sp, 0)`. -/
+def inFrameSpan (s : Sym) (b l : Row) : Bool :=
+  match s.sp, Lin.isConst (Lin.sub b (Lin.var RSP)) with
+  | some sp, some cf => decide (sp ≤ cf) && plain s.facts (Lin.sub (Lin.const (-cf)) l)
+  | _, _ => false
+
+/-- Check that `[b, b + l)` lies within some caller buffer parameter (`bytes`, `out`, `fixed`, `inout`). -/
+def anyBufSubSpan (ctx : Ctx) (s : Sym) (b l : Row) : Bool :=
+  ctx.contract.args.any fun (nm, k) =>
+    match k with
+    | .bytes _ | .out _ | .fixed _ | .inout _ => subSpanOf ctx s b l nm
+    | _ => false
+
+/-- Check that two symbolic extents `[bx, bx + lx)` and `[by_, by_ + ly)` are `L`-byte granule-disjoint
+(`L > 0`): either one has length 0, or they are separated by an `L`-aligned boundary (`bx + lx ≤ by_`
+with `by_ % L = 0`, or symmetrically), or they are sub-spans of caller buffers already `disjoint` at
+a multiple `L'` of `L`, or (`L = 1`) one lies in the caller's stack frame and the other in a caller buffer. -/
+def disjointPairOk (ctx : Ctx) (s : Sym) (bx lx by_ ly : Row) (L : Nat) : Bool :=
   (Lin.isConst lx == some 0) || (Lin.isConst ly == some 0) ||
   (isAligned ctx.contract by_ L && plain s.facts (Lin.sub by_ (Lin.add bx lx))) ||
   (isAligned ctx.contract bx L && plain s.facts (Lin.sub bx (Lin.add by_ ly))) ||
-  ctx.contract.lineDisjoint.any fun (u, v, L') =>
+  (L == 1 && ((inFrameSpan s bx lx && anyBufSubSpan ctx s by_ ly) ||
+              (inFrameSpan s by_ ly && anyBufSubSpan ctx s bx lx))) ||
+  ctx.contract.disjoint.any fun (u, v, L') =>
     decide (0 < L') && decide (L' % L == 0) &&
     ((subSpanOf ctx s bx lx u && subSpanOf ctx s by_ ly v) ||
      (subSpanOf ctx s bx lx v && subSpanOf ctx s by_ ly u))
 
-/-- Check callee buffer alignment preconditions (`c.aligns`) at a call or tail call. -/
+/-- Locate the first argument named `name` when it is a `.valArray`, returning `(r, l, ch, el)`. -/
+def valArrayAtIn (c : Contract) (name : String) : List (String × Kind) → List Nat → Option (Nat × Nat × Nat × Nat)
+  | (n, k) :: args, r :: regs =>
+    if n == name then
+      match k with
+      | .valArray len ch el => (c.regOf len).map fun l => (r, l, ch, el)
+      | _ => none
+    else valArrayAtIn c name args regs
+  | _, _ => none
+
+/-- Check that a callee `.valArray` argument `vaName` is `L`-byte disjoint from a linear extent
+`[by_, by_ + ly)`: either `vaName` lies in the caller's stack frame (and `L = 1`, disjoint from any
+caller buffer or a non-overlapping frame slot), or `vaName` is a slice of a caller `.valArray` `x0`
+that is `L'`-disjoint (`L' % L = 0`) from the caller buffer containing `[by_, by_ + ly)` (or `L = 1` vs frame). -/
+def valArraySpanDisjointOk (ctx : Ctx) (s : Sym) (c : Contract) (vaName : String) (by_ ly : Row) (L : Nat) : Bool :=
+  match valArrayAtIn c vaName c.args c.argRegs with
+  | none => false
+  | some (rx, rl, ch, el) =>
+    if !(0 < ch && 0 < el) then false
+    else if (Lin.isConst ly == some 0) then true
+    else
+      let fromSlice :=
+        match findValArray (s.reg rx) ctx.contract.valArrays 0 with
+        | some (_, x0, r0, l0, ch0, el0, d) =>
+          (valArrayAtIn ctx.contract x0 ctx.contract.args ctx.contract.argRegs == some (r0, l0, ch0, el0)) &&
+          (ch == ch0) && (el == el0) && decide (0 ≤ d) && (d % (el : Int) == 0) &&
+          plain s.facts (Lin.sub (Lin.var l0) (Lin.add (Lin.const ((d.toNat / el) * ch)) (s.reg rl))) &&
+          ((L == 1 && inFrameSpan s by_ ly) ||
+           ctx.contract.disjoint.any fun (u, v, L') =>
+             decide (0 < L') && decide (L' % L == 0) &&
+             ((u == x0 && subSpanOf ctx s by_ ly v) || (v == x0 && subSpanOf ctx s by_ ly u)))
+        | none => false
+      let fromFrame :=
+        if L != 1 then false
+        else match s.sp, frameAt s rx with
+        | some sp, some cf =>
+          decide (sp ≤ cf) && decide (cf ≤ 0) &&
+          let maxFit := (-cf).toNat / el
+          let fitsFrame := plain s.facts (Lin.sub (Lin.const ((((maxFit + 1 : Int) * (ch : Int)) - 1))) (s.reg rl))
+          (fitsFrame && anyBufSubSpan ctx s by_ ly) ||
+          match Lin.isConst (Lin.sub by_ (Lin.var RSP)) with
+          | some cf2 =>
+            (fitsFrame && decide (sp ≤ cf2) && plain s.facts (Lin.sub (Lin.const (cf - cf2)) ly)) ||
+            (decide (cf ≤ cf2) && decide (cf2 ≤ 0) &&
+              let maxBelow := (cf2 - cf).toNat / el
+              plain s.facts (Lin.sub (Lin.const ((((maxBelow + 1 : Int) * (ch : Int)) - 1))) (s.reg rl)))
+          | none => false
+        | _, _ => false
+      fromSlice || fromFrame
+
+/-- Check callee parameter alignment preconditions (`c.aligns`) at a call or tail call. -/
 def callAlignsOk (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
   each (fun (x, al) =>
     if al == 0 then pure ()
@@ -5285,21 +5350,29 @@ def callAlignsOk (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
       else refuse s!"argument `{x}` is not shown to be {al}-byte aligned"
     | none => pure ()) c.aligns
 
-/-- Check callee cache-line disjointness preconditions (`c.lineDisjoint`) at a call or tail call. -/
-def callLineDisjointOk (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
+/-- Check callee granule-disjointness preconditions (`c.disjoint`) at a call or tail call. -/
+def callDisjointOk (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
   each (fun (x, y, L) =>
     if L == 0 then pure ()
     else match spanRow c s.reg x, spanRow c s.reg y with
     | some (bx, lx), some (by_, ly) =>
-      if lineDisjointPairOk ctx s bx lx by_ ly L then pure ()
-      else refuse s!"arguments `{x}` and `{y}` are not shown to be {L}-byte cache-line disjoint"
-    | _, _ =>
+      if disjointPairOk ctx s bx lx by_ ly L then pure ()
+      else refuse s!"arguments `{x}` and `{y}` are not shown to be {L}-byte disjoint"
+    | none, some (by_, ly) =>
       if (c.regOf x).isNone || (c.regOf y).isNone then pure ()
-      else refuse s!"arguments `{x}` and `{y}` have extents not handled for {L}-byte cache-line disjointness") c.lineDisjoint
+      else if valArraySpanDisjointOk ctx s c x by_ ly L then pure ()
+      else refuse s!"arguments `{x}` and `{y}` are not shown to be {L}-byte disjoint"
+    | some (bx, lx), none =>
+      if (c.regOf x).isNone || (c.regOf y).isNone then pure ()
+      else if valArraySpanDisjointOk ctx s c y bx lx L then pure ()
+      else refuse s!"arguments `{x}` and `{y}` are not shown to be {L}-byte disjoint"
+    | none, none =>
+      if (c.regOf x).isNone || (c.regOf y).isNone then pure ()
+      else refuse s!"arguments `{x}` and `{y}` have extents not handled for {L}-byte disjointness") c.disjoint
 
 /-- Check stack budget (`stackFitsM`), callee `mbounds`, callee numeric lower bounds (`atLeast`),
-multi-variable linear preconditions (`preLines`), buffer alignments (`aligns`), cache-line disjointness
-(`lineDisjoint`), and strict decrease of `decreases` on a direct recursive self-call. -/
+multi-variable linear preconditions (`preLines`), parameter alignments (`aligns`), granule disjointness
+(`disjoint`), and strict decrease of `decreases` on a direct recursive self-call. -/
 def callPreOk (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : V Unit := do
   match s.sp with
   | none => refuse "at a call the stack pointer is not known"
@@ -5313,7 +5386,6 @@ def callPreOk (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : V Unit := d
   each (fun (kt : Int × List (String × Int)) =>
     entail s.facts (preLineRow c s.reg kt.1 kt.2)) c.preLines
   callAlignsOk ctx s c
-  callLineDisjointOk ctx s c
   if ctx.selfName == some name then
     match c.decreases with
     | some d =>
@@ -5337,11 +5409,13 @@ def symCall' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   else symCallW ctx s c
 
 /-- A call: first the rows the proof file gives here join the facts (the bounds of the parts of runs
-handed over, where the facts do not say them at once); then `callPreOk` and `symCall'`. -/
+handed over, where the facts do not say them at once); then `callPreOk`, `symCall'`, and `callDisjointOk`. -/
 def symCall (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : V Sym := do
   let s ← symKnow (ctx.advice.call · c) KNOWN s
   callPreOk ctx s name c
-  symCall' ctx s c
+  let s' ← symCall' ctx s c
+  callDisjointOk ctx s c
+  pure s'
 
 /-- What a called function needs of the processor (`needs avx512`, `needs avx512 if plat == 5`), this function's
 contract says too. (The machine of the account has every row of the table, so no theorem asks this. A reader of
@@ -5580,7 +5654,7 @@ def tailFits (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : Bool :=
   (c.fixeds.all fun x => (frameAt s x.2.1).isNone)
 
 /-- Entry preconditions at a tail call: callee stack fits with zero extra return-address slot (`extra = 0`),
-plus callee `mbounds`, `atLeast`, `preLines`, `aligns`, and `lineDisjoint`. -/
+plus callee `mbounds`, `atLeast`, `preLines`, `aligns`, and `disjoint`. -/
 def tailPreOk (ctx : Ctx) (s : Sym) (c : Contract) : V Unit := do
   stackFitsMAt ctx s 0 0 c
   callMboundsOk ctx s 0 c
@@ -5591,10 +5665,9 @@ def tailPreOk (ctx : Ctx) (s : Sym) (c : Contract) : V Unit := do
   each (fun (kt : Int × List (String × Int)) =>
     entail s.facts (preLineRow c s.reg kt.1 kt.2)) c.preLines
   callAlignsOk ctx s c
-  callLineDisjointOk ctx s c
 
-/-- A tail call: checks `tailFits`, `needsOf`, `symKnow`, `tailPreOk`, `symCall'`, `callQuiet`,
-`resultFollowsTrace` on `retReg`, and `symReturn` on the resulting post-call state. -/
+/-- A tail call: checks `tailFits`, `needsOf`, `symKnow`, `tailPreOk`, `symCall'`, `callDisjointOk`,
+`callQuiet`, `resultFollowsTrace` on `retReg`, and `symReturn` on the resulting post-call state. -/
 def symTail (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : V Unit := do
   if !tailFits ctx s name c then
     refuse "a tail call requires the same machine, sp at entry, preserved registers and link restored and kept by the callee, and no stack-frame operand"
@@ -5603,6 +5676,7 @@ def symTail (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : V Unit := do
     let s ← symKnow (ctx.advice.call · c) KNOWN s
     tailPreOk ctx s c
     let s' ← symCall' ctx s c
+    callDisjointOk ctx s c
     if !callQuiet ctx (quietAtCall s c) c then
       refuse "at a tail call, something the called function's contract requires to stay out of the trace may depend on values kept out of the trace"
     else

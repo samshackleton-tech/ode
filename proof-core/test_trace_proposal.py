@@ -595,7 +595,7 @@ contract t_equal_ct(a: n bytes, b: n bytes, n: number) {
     stack 0
 }
 contract t_keep_ct(want: n bytes, tag: n bytes, n: number, out: 1 bytes) {
-    requires no_overlap(want, tag, out)
+    requires disjoint(want, tag, out, 1)
     ensures out[0 .. 1] = [same_ct(want, tag) % 256]
     trace depends on n
     stack 16
@@ -860,7 +860,7 @@ contract t_arm_sign_inline(p: n bytes, n: number) {
         # 5. arm_keep calling arm_far and storing result with `trace depends on n` -> shown!
         spec_keep = base + """
 contract t_arm_keep(p: n bytes, n: number, out: 1 bytes) {
-    requires no_overlap(p, out)
+    requires disjoint(p, out, 1)
     ensures out[0 .. 1] = [first_byte(p) % 256]
     trace depends on n
     stack 32

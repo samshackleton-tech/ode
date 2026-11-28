@@ -9,7 +9,7 @@ def mix16_chain_3(d, a) {
 }
 
 contract ode_mix16_3(out: block, d: block, a: block) {
-    requires no_overlap(out, d, a)
+    requires disjoint(out, d, a, 1)
     ensures out = mix16_chain_3(d, a)
     stack 0
     needs avx512

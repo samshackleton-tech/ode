@@ -214,7 +214,7 @@ class Verify(unittest.TestCase):
 """
         spec = """def add(a, b) { [a[i] + b[i] for i in 0..16] }
 contract wide_add(out: block, a: block, b: block) {
-  requires no_overlap(out, a, b)
+  requires disjoint(out, a, b, 1)
   ensures out = add(a, b)
   stack 0
   needs avx512
@@ -287,7 +287,7 @@ contract wide_add(out: block, a: block, b: block) {
 }
 """
         spec = """contract spill_copy(out: block, input: block) {
-  requires no_overlap(out, input)
+  requires disjoint(out, input, 1)
   ensures out = input
   stack 207
   needs avx512
@@ -349,7 +349,7 @@ contract wide_add(out: block, a: block, b: block) {
 }
 """
         spec = """contract spill_two(p: block, q: block, a: block, b: block) {
-  requires no_overlap(p, q, a, b)
+  requires disjoint(p, q, a, b, 1)
   ensures p = a
   ensures q = b
   stack 271

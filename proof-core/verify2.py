@@ -11,7 +11,7 @@ Covers both x86-64 and AArch64:
   - 32-bit word term table (`WordTab`), 128-bit and 512-bit SIMD lanes, hardware SHA-256 ops
     (x86 SHA-NI and AArch64 SHA2), uniform word-backed scalar/vector memory, aligned 64-byte stack
     spills, lane pointer tables, `ensuresw`, and vector loop `lane`/`cell` invariants.
-  - Cache-line and VM-page alignment (`align`) and disjointness (`linedisjoint`).
+  - Cache-line and VM-page alignment (`align`) and granule disjointness (`disjoint`).
   - Linear-inequality Farkas/Gomory refutation certificates (`p`/`r`, `s`, `q`), loop/join `place`s,
     `check` assertions, `def` unfolding, multi-function contracts, and trace-mark enforcement.
 
@@ -627,7 +627,7 @@ def parse_statement(path):
                     "lanes": [],
                     "atleast": [],
                     "aligns": [],
-                    "linedisjoint": [],
+                    "disjoint": [],
                     "linpre": [],
                     "returns": None,
                     "result": None,
@@ -722,11 +722,11 @@ def parse_statement(path):
                 if al <= 0:
                     raise Refuse(f"malformed align line in verify2: {line}")
                 cur["aligns"].append((parts[1], al))
-            elif kw == "linedisjoint":
+            elif kw == "disjoint":
                 ln = int(parts[3])
                 if ln <= 0:
-                    raise Refuse(f"malformed linedisjoint line in verify2: {line}")
-                cur["linedisjoint"].append((parts[1], parts[2], ln))
+                    raise Refuse(f"malformed disjoint line in verify2: {line}")
+                cur["disjoint"].append((parts[1], parts[2], ln))
             elif kw == "linpre":
                 # `linpre K a1 c1 a2 c2 ...`: the entry condition 0 <= K + c1*a1 + c2*a2 + ...
                 if len(parts) % 2 != 0:
@@ -1817,6 +1817,111 @@ class Verifier:
                     return None
             return None
 
+        def _valarray_at(contract, c_regs, nm):
+            reg_by_name = {a: c_regs[i] for i, (a, _, _) in enumerate(contract["args"])}
+            for i, (a, k, alen) in enumerate(contract["args"]):
+                if a == nm:
+                    if k == "valarray":
+                        len_nm, ch, el = alen
+                        rl = reg_by_name.get(len_nm)
+                        return (c_regs[i], rl, int(ch), int(el)) if rl is not None else None
+                    return None
+            return None
+
+        def _row_const_diff(row, base_row):
+            d = r_sub(row, base_row)
+            return d[0] if not d[1] else None
+
+        def _in_frame_span(st, b, l):
+            sp_diff = _row_const_diff(st["regs"][sp_reg], entry_regs[sp_reg])
+            cf = _row_const_diff(b, entry_regs[sp_reg])
+            if sp_diff is None or cf is None:
+                return False
+            return sp_diff <= cf and r_plain(st["facts"], r_sub(r_const(-cf), l))
+
+        def _sub_span_of(st, b, l, nm):
+            su = _span_row(fn, arg_regs, entry_regs, nm)
+            if su is None:
+                return False
+            bu, lu = su
+            return r_plain(st["facts"], r_sub(b, bu)) and r_plain(st["facts"], r_sub(r_add(bu, lu), r_add(b, l)))
+
+        def _any_buf_sub_span(st, b, l):
+            for a, k, _ in fn["args"]:
+                if k in ("bytes", "out", "fixed", "inout") and _sub_span_of(st, b, l, a):
+                    return True
+            return False
+
+        def _disjoint_pair_ok(st, bx, lx, by_, ly, L):
+            if (not lx[1] and lx[0] == 0) or (not ly[1] and ly[0] == 0):
+                return True
+            if _is_aligned(by_, L) and r_plain(st["facts"], r_sub(by_, r_add(bx, lx))):
+                return True
+            if _is_aligned(bx, L) and r_plain(st["facts"], r_sub(bx, r_add(by_, ly))):
+                return True
+            if L == 1 and (
+                (_in_frame_span(st, bx, lx) and _any_buf_sub_span(st, by_, ly))
+                or (_in_frame_span(st, by_, ly) and _any_buf_sub_span(st, bx, lx))
+            ):
+                return True
+            for u, v, Lp in fn["disjoint"]:
+                if Lp <= 0 or (Lp % L) != 0:
+                    continue
+                if (_sub_span_of(st, bx, lx, u) and _sub_span_of(st, by_, ly, v)) or (
+                    _sub_span_of(st, bx, lx, v) and _sub_span_of(st, by_, ly, u)
+                ):
+                    return True
+            return False
+
+        def _valarray_span_disjoint_ok(c, c_arg_regs, st, va_name, by_, ly, L):
+            va = _valarray_at(c, c_arg_regs, va_name)
+            if va is None:
+                return False
+            rx, rl, ch, el = va
+            if not (ch > 0 and el > 0):
+                return False
+            if not ly[1] and ly[0] == 0:
+                return True
+            # Slice of caller valArray
+            for x0, r0, l0, ch0, el0 in val_arrays_list:
+                d = _row_const_diff(st["regs"][rx], r_var(r0))
+                if d is not None and d >= 0 and (d % 4) == 0:
+                    va0 = _valarray_at(fn, arg_regs, x0)
+                    if (
+                        va0 is not None
+                        and (reg_to_idx[va0[0]], reg_to_idx[va0[1]], va0[2], va0[3]) == (r0, l0, ch0, el0)
+                        and ch == ch0
+                        and el == el0
+                        and (d % el) == 0
+                        and r_plain(st["facts"], r_sub(r_var(l0), r_add(r_const((d // el) * ch), st["regs"][rl])))
+                    ):
+                        if L == 1 and _in_frame_span(st, by_, ly):
+                            return True
+                        for u, v, Lp in fn["disjoint"]:
+                            if Lp <= 0 or (Lp % L) != 0:
+                                continue
+                            if (u == x0 and _sub_span_of(st, by_, ly, v)) or (v == x0 and _sub_span_of(st, by_, ly, u)):
+                                return True
+                    break
+            # Frame-backed valArray (L == 1)
+            if L == 1:
+                sp_diff = _row_const_diff(st["regs"][sp_reg], entry_regs[sp_reg])
+                cf = _row_const_diff(st["regs"][rx], entry_regs[sp_reg])
+                if sp_diff is not None and cf is not None and sp_diff <= cf <= 0:
+                    max_fit = (-cf) // el
+                    fits_frame = r_plain(st["facts"], r_sub(r_const((max_fit + 1) * ch - 1), st["regs"][rl]))
+                    if fits_frame and _any_buf_sub_span(st, by_, ly):
+                        return True
+                    cf2 = _row_const_diff(by_, entry_regs[sp_reg])
+                    if cf2 is not None:
+                        if fits_frame and sp_diff <= cf2 and r_plain(st["facts"], r_sub(r_const(cf - cf2), ly)):
+                            return True
+                        if cf <= cf2 <= 0:
+                            max_below = (cf2 - cf) // el
+                            if r_plain(st["facts"], r_sub(r_const((max_below + 1) * ch - 1), st["regs"][rl])):
+                                return True
+            return False
+
         def _check_call_align_ld(c, c_arg_regs, st):
             c_reg_by_name = {a: c_arg_regs[i] for i, (a, _, _) in enumerate(c["args"])}
             for x, al in c["aligns"]:
@@ -1825,40 +1930,25 @@ class Verifier:
                 r = c_reg_by_name.get(x)
                 if r is not None and not _is_aligned(st["regs"][r], al):
                     raise Refuse(f"argument `{x}` is not shown to be {al}-byte aligned")
-            for x, y, L in c["linedisjoint"]:
+            for x, y, L in c["disjoint"]:
                 if L <= 0:
                     continue
                 sx = _span_row(c, c_arg_regs, st["regs"], x)
                 sy = _span_row(c, c_arg_regs, st["regs"], y)
-                if sx is None or sy is None:
+                if sx is not None and sy is not None:
+                    if not _disjoint_pair_ok(st, sx[0], sx[1], sy[0], sy[1], L):
+                        raise Refuse(f"arguments `{x}` and `{y}` are not shown to be {L}-byte disjoint")
+                elif sx is None and sy is not None:
                     if x in c_reg_by_name and y in c_reg_by_name:
-                        raise Refuse(f"arguments `{x}` and `{y}` have extents not handled for {L}-byte cache-line disjointness")
-                    continue
-                bx, lx = sx
-                by_, ly = sy
-                ok = (
-                    (not lx[1] and lx[0] == 0)
-                    or (not ly[1] and ly[0] == 0)
-                    or (_is_aligned(by_, L) and r_plain(st["facts"], r_sub(by_, r_add(bx, lx))))
-                    or (_is_aligned(bx, L) and r_plain(st["facts"], r_sub(bx, r_add(by_, ly))))
-                )
-                if not ok:
-                    for u, v, Lp in fn["linedisjoint"]:
-                        if Lp <= 0 or (Lp % L) != 0:
-                            continue
-                        su = _span_row(fn, arg_regs, entry_regs, u)
-                        sv = _span_row(fn, arg_regs, entry_regs, v)
-                        if su is None or sv is None:
-                            continue
-                        bu, lu = su
-                        bv, lv = sv
-                        def _sub(b, l, b0, l0):
-                            return r_plain(st["facts"], r_sub(b, b0)) and r_plain(st["facts"], r_sub(r_add(b0, l0), r_add(b, l)))
-                        if (_sub(bx, lx, bu, lu) and _sub(by_, ly, bv, lv)) or (_sub(bx, lx, bv, lv) and _sub(by_, ly, bu, lu)):
-                            ok = True
-                            break
-                if not ok:
-                    raise Refuse(f"arguments `{x}` and `{y}` are not shown to be {L}-byte cache-line disjoint")
+                        if not _valarray_span_disjoint_ok(c, c_arg_regs, st, x, sy[0], sy[1], L):
+                            raise Refuse(f"arguments `{x}` and `{y}` are not shown to be {L}-byte disjoint")
+                elif sx is not None and sy is None:
+                    if x in c_reg_by_name and y in c_reg_by_name:
+                        if not _valarray_span_disjoint_ok(c, c_arg_regs, st, y, sx[0], sx[1], L):
+                            raise Refuse(f"arguments `{x}` and `{y}` are not shown to be {L}-byte disjoint")
+                else:
+                    if x in c_reg_by_name and y in c_reg_by_name:
+                        raise Refuse(f"arguments `{x}` and `{y}` have extents not handled for {L}-byte disjointness")
         for k, terms in fn["linpre"]:
             facts.append(self.linpre_row(k, terms, env))
         for req in fn["requires"]:

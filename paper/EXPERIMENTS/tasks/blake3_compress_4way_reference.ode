@@ -110,7 +110,7 @@ inline fn round_arm(
 }
 
 fn blake3_compress_4way(out: 128 bytes, cvs: 128 bytes, blocks: 256 bytes, metas: 64 bytes)
-    requires no_overlap(out, cvs, blocks, metas)
+    requires disjoint(out, cvs, blocks, metas, 1)
     ensures out = bytes_of(spec.compress_4way(words(cvs), words(blocks), words(metas)))
     stack 256
 for x86_64 needs avx needs avx512 {

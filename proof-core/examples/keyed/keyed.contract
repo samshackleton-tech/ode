@@ -8,7 +8,7 @@
 layout keyed 40 { key: cv at 0, flags: byte at 32 }
 
 contract ode_keyed(out: cv, m: block, kf: keyed) {
-    requires no_overlap(out, m, kf)
+    requires disjoint(out, m, kf, 1)
     ensures out = compress(kf.key, m, counter(0), 64, kf.flags)
     stack 64
     needs sse41

@@ -1,6 +1,6 @@
 // 4-way NEON BLAKE3 kernel for AArch64 (unified `.ode` with linked local namespace).
-use b3 = "ya6gqve7vxwsty67gvln6hr4lxkvo2vmknwk4l3prxrvtmuetiqq"  // blake3_spec.ode
-use comp = "r74eijstebwgwmyayvlwv4k6lxhlgv6oglwzoyuzroavfkg4b7yq"  // compress_arm64.ode
+use b3 = "2foz4xsr64wppbos355toq2edgzfhdhbtzyfj4lkgx62cvcfbrpq"  // blake3_spec.ode
+use comp = "pfgpj2jsvpklyrk3l3d6tygn3m2f22qe2umfiyqc74eyzc5jhjqq"  // compress_arm64.ode
 
 // 4-way NEON 4-KiB BLAKE3 subtree kernel for AArch64 (`ldr q`/`str q` indexed loads/stores,
 // resident v0..v7 CVs across all 16 blocks, resident v28..v31 for m[0..3]).
@@ -42,7 +42,7 @@ inline fn transpose4 for arm64 (r0: vec, r1: vec, r2: vec, r3: vec, t0: vec, t1:
 }
 
 fn wide4_fast(out: block, input: 4096 bytes, kf: b3.keyed, t: number)
-    requires no_overlap(out, input, kf)
+    requires disjoint(out, input, kf, 1)
     requires 1024 * t + 4096 <= 18446744073709551615
     ensures out = b3.children(kf.key, kf.flags, t, input)
     stack 544

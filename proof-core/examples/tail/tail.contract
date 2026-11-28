@@ -7,7 +7,7 @@
 layout tailrec 96 { h: cv at 0, block: 64 bytes at 32 }
 
 contract ode_tail(r: tailrec, src: len bytes, len: number) {
-    requires no_overlap(r, src)
+    requires disjoint(r, src, 1)
     requires len >= 17
     requires len <= 80
     ensures r = {h: r.h, block: padded(src[16 .. len])}

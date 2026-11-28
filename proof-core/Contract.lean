@@ -339,8 +339,8 @@ structure Contract where
   lanes : List (String × String) := []    -- (a run of a fixed count given to read, an argument that is a number): each eight
                                       -- bytes of the run are the address of that many blocks of 64 bytes, given to read
   atLeast : List (String × Nat) := []     -- (an argument that is a number, n): the caller sees to it that the number is no less than n
-  aligns : List (String × Nat) := []      -- (a buffer argument, A): the caller sees to it that its address is a multiple of A (A > 0)
-  lineDisjoint : List (String × String × Nat) := []  -- (argA, argB, L): cache-line disjoint at line size L (L > 0)
+  aligns : List (String × Nat) := []      -- (a parameter, A): the caller sees to it that its value is a multiple of A (A > 0)
+  disjoint : List (String × String × Nat) := []  -- (argA, argB, G): granule-disjoint at granule size G (G > 0; 1 = byte, 64/128 = cache line, 4096/16384 = VM page)
   hidden : List String := []              -- the runs given to read whose bytes may be marked, and the
                                           -- numbers given that may be: what can be observed of a run of the
                                           -- function must not depend on them
@@ -676,7 +676,7 @@ def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
     (s.reg r + el * (s.reg l / ch) ≤ s.reg RSP - c.stackAt s ∨ s.reg RSP + c.slot ≤ s.reg r) ∧
     ∀ x' r' n', (x', r', n') ∈ c.outs → s.reg r + el * (s.reg l / ch) ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r) ∧
   (∀ x al, (x, al) ∈ c.aligns → 0 < al → ∀ r, c.regOf x = some r → s.reg r % al = 0) ∧
-  (∀ x y L, (x, y, L) ∈ c.lineDisjoint → 0 < L →
+  (∀ x y L, (x, y, L) ∈ c.disjoint → 0 < L →
     ∀ bx lx by_ ly, c.bufSpan s x = some (bx, lx) → c.bufSpan s y = some (by_, ly) →
       ∀ i < lx, ∀ j < ly, (bx + i) / L ≠ (by_ + j) / L)
 

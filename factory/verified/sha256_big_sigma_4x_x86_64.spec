@@ -7,7 +7,7 @@ def big_sigma1(e) { (e >>> 6) ^ (e >>> 11) ^ (e >>> 25) }
 def big_sigma_sum4(a, e) { [big_sigma0(a[i]) + big_sigma1(e[i]) for i in 0..4] }
 
 contract ode_sha256_big_sigma_4x(out: 16 bytes, a: 16 bytes, e: 16 bytes) {
-    requires no_overlap(out, a, e)
+    requires disjoint(out, a, e, 1)
     ensures out = bytes_of(big_sigma_sum4(words(a), words(e)))
     stack 0
     needs avx

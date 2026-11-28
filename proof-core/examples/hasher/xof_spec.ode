@@ -1,5 +1,5 @@
 // BLAKE3 64-byte XOF root output block (both 32-byte halves of the 16-word compression output).
-use b3 = "ya6gqve7vxwsty67gvln6hr4lxkvo2vmknwk4l3prxrvtmuetiqq"  // blake3_spec.ode
+use b3 = "2foz4xsr64wppbos355toq2edgzfhdhbtzyfj4lkgx62cvcfbrpq"  // blake3_spec.ode
 
 def compress_xof_hi(h, m, t, length, flags) {
     let s[0] = h ++ [word(b3.IV[0]), word(b3.IV[1]), word(b3.IV[2]), word(b3.IV[3]), lo(t), hi(t), word(length), word(flags)]

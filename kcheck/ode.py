@@ -240,44 +240,46 @@ class Parser:
         self.take("("); args = []
         while not self.maybe(")"):
             arg = self.take(kind="name"); self.take(":"); args.append((arg, self.kind())); self.maybe(",")
-        c = dict(args=args, asks=[], given=[], leaves=[], spoils=[], returns=None, stack=None, calls=[], needs=[], decreases=None, no_overlap=None, aligns=[], line_disjoint=[], trace=[], trace_exprs=[], result_dep=None, conditions=[], calling=None)
+        c = dict(args=args, asks=[], given=[], leaves=[], spoils=[], returns=None, stack=None, calls=[], needs=[], decreases=None, aligns=[], disjoint=[], trace=[], trace_exprs=[], result_dep=None, conditions=[], calling=None)
         self.take("{")
         def once(what, key):
             # said twice, the second would silently be the one meant
             if c[key] is not None: raise Err(f"line {self.t[self.i - 1][2]}: a contract says `{what}` once")
         while not self.maybe("}"):
             clause = self.take(kind="name")
-            if clause == "requires" and self.t[self.i][:2] == ("name", "no_overlap") and self.t[self.i + 1][1] == "(":
-                # requires no_overlap(a, b, ...): the things at those addresses do not overlap one another
-                once("requires no_overlap(...)", "no_overlap")
-                self.take(); self.take("("); c["no_overlap"] = []
-                while not self.maybe(")"): c["no_overlap"].append(self.take(kind="name")); self.maybe(",")
+            if clause == "requires" and self.t[self.i][:2] in (("name", "no_overlap"), ("name", "line_disjoint")) and self.t[self.i + 1][1] == "(":
+                old = self.t[self.i][1]
+                raise Err(f"line {self.t[self.i][2]}: `{old}(...)` was replaced by `requires disjoint(a, b, ..., G)` with an explicit power-of-two granule G (1 = byte, 64/128 = cache line, 4096/16384 = VM page)")
             elif clause == "requires" and self.t[self.i][:2] == ("name", "aligned") and self.t[self.i + 1][1] == "(":
-                # requires aligned(buf, A): buffer base address is a multiple of A (cache-line / SIMD / page boundary)
+                # requires aligned(x, A): parameter (buffer address or number) is a multiple of power-of-two A >= 2
                 line_no = self.t[self.i][2]
                 self.take(); self.take("(")
                 aname = self.take(kind="name"); self.take(",")
                 al = self.take(kind="num"); self.take(")")
-                if al not in (8, 16, 32, 64, 128, 4096, 16384):
-                    raise Err(f"line {line_no}: `requires aligned({aname}, {al})`: alignment must be one of 8, 16, 32, 64, 128, 4096, 16384")
+                if al < 2 or (al & (al - 1)) != 0:
+                    raise Err(f"line {line_no}: `requires aligned({aname}, {al})`: alignment must be a power of two >= 2")
                 c["aligns"].append((aname, al))
-            elif clause == "requires" and self.t[self.i][:2] == ("name", "line_disjoint") and self.t[self.i + 1][1] == "(":
-                # requires line_disjoint(a, b[, ...][, L]): buffers occupy disjoint L-byte cache lines (default L = 64)
+            elif clause == "requires" and self.t[self.i][:2] == ("name", "disjoint") and self.t[self.i + 1][1] == "(":
+                # requires disjoint(a, b, ..., G): buffers occupy disjoint G-byte granules (G >= 1 power of two, explicit)
                 line_no = self.t[self.i][2]
                 self.take(); self.take("(")
-                bufs, line_sz = [], 64
+                bufs, gran = [], None
                 while not self.maybe(")"):
                     if self.peek(kind="num"):
-                        line_sz = self.take(kind="num")
+                        gran = self.take(kind="num")
                         self.take(")")
                         break
                     bufs.append(self.take(kind="name"))
                     self.maybe(",")
                 if len(bufs) < 2:
-                    raise Err(f"line {line_no}: `requires line_disjoint(...)` needs at least two buffer arguments")
-                if line_sz not in (64, 128):
-                    raise Err(f"line {line_no}: `requires line_disjoint(..., {line_sz})`: cache-line size must be 64 or 128")
-                c["line_disjoint"].append((bufs, line_sz))
+                    raise Err(f"line {line_no}: `requires disjoint(...)` needs at least two buffer arguments and a trailing power-of-two granule G")
+                if gran is None:
+                    raise Err(f"line {line_no}: `requires disjoint({', '.join(bufs)})` requires an explicit power-of-two granule G (e.g. 1, 64, 128, 4096)")
+                if gran < 1 or (gran & (gran - 1)) != 0:
+                    raise Err(f"line {line_no}: `requires disjoint(..., {gran})`: granule must be a power of two >= 1")
+                if len(set(bufs)) != len(bufs):
+                    raise Err(f"line {line_no}: `requires disjoint(...)` lists a buffer twice")
+                c["disjoint"].append((bufs, gran))
             elif clause == "requires":
                 e = self.expr()
                 if self.maybe("for"):
@@ -871,6 +873,18 @@ def vectors(spec, path, up_to=None):
             if bytes(got).hex() != case[mode][:64]: raise Err(f"{mode} of {n} bytes: {bytes(got).hex()}, the vector says {case[mode][:64]}")
             done += 1
     return done
+
+
+def disjoint_pairs(c):
+    """Return {(a, b): max_granule} for ordered pairs (a < b) covered by `requires disjoint(...)`."""
+    pairs = {}
+    for bufs, g in (c.get("disjoint") or []):
+        for i in range(len(bufs)):
+            for j in range(i + 1, len(bufs)):
+                k = (bufs[i], bufs[j]) if bufs[i] < bufs[j] else (bufs[j], bufs[i])
+                if g > pairs.get(k, 0):
+                    pairs[k] = g
+    return pairs
 
 
 def main():

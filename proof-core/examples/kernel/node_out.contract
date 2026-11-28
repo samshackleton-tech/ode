@@ -7,7 +7,7 @@
 layout node120 120 { h: cv at 0, block: 64 bytes at 32, counter: number at 96, length: number at 104 below 65, flags: byte at 112 }
 
 contract b3l_node_out(out: cv, nd: node120, root: byte, plat: any) {
-    requires no_overlap(out, nd)
+    requires disjoint(out, nd, 1)
     ensures out = node_value(nd, root)
     trace depends on plat
     stack 128

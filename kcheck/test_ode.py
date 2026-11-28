@@ -90,11 +90,18 @@ class Ode(unittest.TestCase):
                      "sequence s(a) { h[1] = a  h[b + 1] = h[b]  for b in 0..2 }", "sequence s(a) { h[0] = a  h[b + 1] = h  for b in 0..2 }"):
             with self.assertRaises(ode.Err, msg=text):
                 ode.Spec(text)
-        # a contract says its stack, what it returns, what does not overlap and what decreases once: of two, one would be dropped
-        for twice in ("stack 8\n stack 16", "returns 1\n returns 2\n stack 8", "requires no_overlap(a, b)\n requires no_overlap(a, b)\n returns 1\n stack 8", "decreases n\n decreases n\n returns 1\n stack 8"):
-            with self.assertRaises(ode.Err, msg=twice):
-                ode.Spec("contract f(a: 4 bytes, b: 4 bytes, n: number) {\n writes a\n " + twice + "\n}")
-        ode.Spec("contract f(a: 4 bytes, b: 4 bytes, n: number) {\n writes a\n requires no_overlap(a, b)\n returns 1\n decreases n\n stack 8\n}")
+        # a contract says its stack, what it returns, and what decreases once; disjoint/aligned require explicit power-of-two granules
+        for bad in ("stack 8\n stack 16", "returns 1\n returns 2\n stack 8", "decreases n\n decreases n\n returns 1\n stack 8",
+                    "requires no_overlap(a, b)\n returns 1\n stack 8",
+                    "requires line_disjoint(a, b, 64)\n returns 1\n stack 8",
+                    "requires disjoint(a, b)\n returns 1\n stack 8",
+                    "requires disjoint(a, b, 3)\n returns 1\n stack 8",
+                    "requires disjoint(a, a, 1)\n returns 1\n stack 8",
+                    "requires aligned(a, 3)\n returns 1\n stack 8",
+                    "requires aligned(a, 1)\n returns 1\n stack 8"):
+            with self.assertRaises(ode.Err, msg=bad):
+                ode.Spec("contract f(a: 4 bytes, b: 4 bytes, n: number) {\n writes a\n " + bad + "\n}")
+        ode.Spec("contract f(a: 4 bytes, b: 4 bytes, n: number) {\n writes a\n requires aligned(a, 256)\n requires aligned(n, 4096)\n requires disjoint(a, b, 4096)\n returns 1\n decreases n\n stack 8\n}")
         spec = ode.Spec("def f(x) { x + nothing }\ndef g(x) { word(1) * 2 }\ndef h(x) { [1, 2][x] }")
         for name in ("f", "g"):
             with self.assertRaises(ode.Err, msg=name):

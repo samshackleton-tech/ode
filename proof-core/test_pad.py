@@ -7,7 +7,7 @@ The function is `b3l_pad` as it lies in ../kcheck/b3hashr.o: 39 instructions. It
 ../kcheck/proofs/inner.spec, as it is written there:
 
     contract b3l_pad(block: 64 bytes, src: n bytes, n: number) {
-        requires no_overlap(block, src)
+        requires disjoint(block, src, 1)
         requires n <= 64
         ensures block = padded(src)
         trace depends on n
@@ -37,7 +37,7 @@ import built, lean_verify, odec, prove, statement
 
 OBJ = os.path.join(KCHECK, "b3hashr.o")
 PAD = "b3l_pad"
-LINES = ["fn b3l_pad", "arg block out 64", "arg src bytes n", "arg n number", "below n 65", "hidden src",
+LINES = ["fn b3l_pad", "arg block out 64", "arg src bytes n", "arg n number", "below n 65", "disjoint block src 1", "hidden src",
          "ensures block (num 0) (num 64) (call padded (name src))", "stack 48"]
 SECRET = "may depend on values kept out of the trace"
 
@@ -195,7 +195,7 @@ class Pad(unittest.TestCase):
         import ode_tool
         spec_src = """def pad8(src) { [if i < len(src) then src[i] else 0 for i in 0..8] }
 contract fwd_pad8(out: 8 bytes, src: n bytes, n: number) {
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     requires n <= 8
     ensures out = pad8(src)
     trace depends on n

@@ -324,10 +324,10 @@ fn lz4_frame_hdr_len(buf: n bytes, n: number)
 def copy16(a) { [a[i] for i in 0..16] }
 
 fn lz4_copy_lit64(out: 64 bytes, src: 64 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     requires aligned(out, 64)
     requires aligned(src, 64)
-    requires line_disjoint(out, src)
+    requires disjoint(out, src, 64)
     ensures out = bytes_of(copy16(words(src)))
     stack 0
 {

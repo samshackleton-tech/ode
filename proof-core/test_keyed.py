@@ -31,7 +31,7 @@ import built, lean_verify, odec, prove, statement
 KEYED = os.path.join(HERE, "examples", "keyed")
 NAME, SSE41 = "ode_keyed", "blake3_servil_compress_in_place_sse41"
 FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), SSE41), (os.path.join(KEYED, "odekeyed.o"), NAME)]
-CONTRACT = ["arg out inout 32", "arg m fixed 64", "arg kf fixed 40", "mbelow kf 32 256", "needs sse41", "hidden m", "hidden kf",
+CONTRACT = ["arg out inout 32", "arg m fixed 64", "arg kf fixed 40", "mbelow kf 32 256", "needs sse41", "disjoint out m 1", "disjoint out kf 1", "disjoint m kf 1", "hidden m", "hidden kf",
             "ensuresw out (call bytes_of (call compress (call words (slice (name kf) (num 0) (num 32))) (call words (name m)) "
             "(call counter (num 0)) (num 64) (call number.le (slice (name kf) (num 32) (num 40)))))",
             "stack 64"]

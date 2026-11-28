@@ -1049,7 +1049,7 @@ contract and the layout of `../kcheck/proofs/inner.spec` as they are written the
 
     layout node120 120 { h: cv at 0, block: 64 bytes at 32, counter: number at 96, length: number at 104 below 65, flags: byte at 112 }
     contract b3l_chunk_node(nd: node120, input: len bytes, len: number, t: number, flags: byte, plat: any) {
-        requires no_overlap(nd, input)
+        requires disjoint(nd, input, 1)
         requires len <= 1024
         ensures nd = chunk_node(nd.h, t, flags, input)
         stack 256

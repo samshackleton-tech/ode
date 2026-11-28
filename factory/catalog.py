@@ -323,7 +323,7 @@ contract ode_lz4_ext_len(buf: n bytes, n: number) {
 def pad32(src) { [if i < len(src) then src[i] else 0 for i in 0..32] }
 
 contract ode_lz4_pad_lit32(out: 32 bytes, src: n bytes, n: number) {
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     requires n <= 32
     ensures out = pad32(src)
     trace depends on n
@@ -373,7 +373,7 @@ def chacha_qr(s) {
 }
 
 contract ode_chacha20_qround_4x(out: block, state: block) {
-    requires no_overlap(out, state)
+    requires disjoint(out, state, 1)
     ensures out = chacha_qr(state)
     stack 0
 }
@@ -400,7 +400,7 @@ def big_sigma1(e) { (e >>> 6) ^ (e >>> 11) ^ (e >>> 25) }
 def big_sigma_sum4(a, e) { [big_sigma0(a[i]) + big_sigma1(e[i]) for i in 0..4] }
 
 contract ode_sha256_big_sigma_4x(out: 16 bytes, a: 16 bytes, e: 16 bytes) {
-    requires no_overlap(out, a, e)
+    requires disjoint(out, a, e, 1)
     ensures out = bytes_of(big_sigma_sum4(words(a), words(e)))
     stack 0
 }
@@ -759,7 +759,7 @@ def chacha20_block(s) {
 }
 
 contract ode_chacha20_block(out: 64 bytes, state: 64 bytes) {
-    requires no_overlap(out, state)
+    requires disjoint(out, state, 1)
     ensures out = bytes_of(chacha20_block(words(state)))
     stack 0
 }

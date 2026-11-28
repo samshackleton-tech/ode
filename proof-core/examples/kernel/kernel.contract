@@ -3,7 +3,7 @@
 // are touched depend on nothing that is given: on no byte of h or m, and not on the length, the counter or
 // the flags.
 contract blake3_servil_compress_in_place_avx512(h: cv, m: block, length: low byte, t: counter, flags: low byte) {
-    requires no_overlap(h, m)
+    requires disjoint(h, m, 1)
     ensures h = compress(h, m, t, length, flags)
     stack 0
     needs avx512

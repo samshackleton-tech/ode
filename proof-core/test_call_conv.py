@@ -481,7 +481,7 @@ class CallingConvVerification(unittest.TestCase):
         spec_internal = """
         def copy8(d) { [d[i] for i in 0..8] }
         contract ode_copy_v8_int(out: cv, inp: cv) {
-            requires no_overlap(out, inp)
+            requires disjoint(out, inp, 1)
             ensures out = copy8(inp)
             stack 0
             calling {
@@ -489,7 +489,7 @@ class CallingConvVerification(unittest.TestCase):
             }
         }
         contract ode_caller_c(out: cv, inp: cv) {
-            requires no_overlap(out, inp)
+            requires disjoint(out, inp, 1)
             ensures out = copy8(inp)
             stack 16
         }

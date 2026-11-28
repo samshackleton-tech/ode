@@ -115,7 +115,7 @@ as many as the number `len`, another argument). The number a function returns is
 specification a number is of any size and never wraps: part 1. It is only an argument or a result
 that a register bounds.)
 
-**`requires`**: what the caller makes true. `requires no_overlap(a, b, ...)`: no two of the things at those addresses have a
+**`requires`**: what the caller makes true. `requires disjoint(a, b, ..., G)`: no two of the things at those addresses have a
 byte in common. Two things are required of every caller and not written. The stack is the machine's own,
 and nothing an argument addresses lies in it. And the program is loaded: the constants that lie in each
 of its object files beside the code are in memory where that file's code takes them to be, and nothing

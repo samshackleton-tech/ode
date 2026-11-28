@@ -6,7 +6,7 @@
 // hidden.)
 contract blake3_servil_avx512_p16(inputs: 16 inputs, n: number, key: cv, t: counter, packed: bytes flags start end length, out: 16 cvs) {
     requires n >= 1
-    requires no_overlap(inputs, key, out)
+    requires disjoint(inputs, key, out, 1)
     ensures out[i] = chunk(key, t, flags, start, end, length, n, inputs[i]) for i in 0..16
     trace depends on n
     stack 4096

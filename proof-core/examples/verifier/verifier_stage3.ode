@@ -256,12 +256,12 @@ fn v_hex_byte(hi: u8, lo: u8)
 def xor16(a, b) { [a[i] ^ b[i] for i in 0..16] }
 
 fn v_row_xor16(out: 64 bytes, a: 64 bytes, b: 64 bytes)
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     requires aligned(out, 64)
     requires aligned(a, 64)
     requires aligned(b, 64)
-    requires line_disjoint(out, a)
-    requires line_disjoint(out, b)
+    requires disjoint(out, a, 64)
+    requires disjoint(out, b, 64)
     ensures out = bytes_of(xor16(words(a), words(b)))
     stack 0
 {
@@ -285,12 +285,12 @@ fn v_row_xor16(out: 64 bytes, a: 64 bytes, b: 64 bytes)
 def comb2_16(a, b) { [(a[i] + a[i]) + b[i] for i in 0..16] }
 
 fn v_row_2a_plus_b16(out: 64 bytes, a: 64 bytes, b: 64 bytes)
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     requires aligned(out, 64)
     requires aligned(a, 64)
     requires aligned(b, 64)
-    requires line_disjoint(out, a)
-    requires line_disjoint(out, b)
+    requires disjoint(out, a, 64)
+    requires disjoint(out, b, 64)
     ensures out = bytes_of(comb2_16(words(a), words(b)))
     stack 0
 {

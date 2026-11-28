@@ -1,24 +1,24 @@
 === ode-helpers ===
-order: h0 h1 h2 h3 h4 h5 h6 ode_ckdrhllybtjzr7vgscyhlgz6sxqaga347kozoepvqk3b54ohbfra
+order: h0 h1 h2 h3 h4 h5 h6 ode_atjviztehovcdbhilsklolv27dydrtly3dw75bpu3nfzujbpij6a
 layout m1__node120 120 { r0: cv at 0, r1: 64 bytes at 32, r2: number at 96, r3: number at 104 below 65, r4: byte at 112 }
 
 layout m1__keyed 40 { key: cv at 0, r4: byte at 32 }
 
 contract h0(h: cv, m: block, length: word, t: counter, flags: low word) {
-    requires no_overlap(h, m)
+    requires disjoint(h, m, 1)
     ensures h = f2(h, m, t, length, flags)
     stack 0
 }
 
 contract h4(out: block, input: 4096 bytes, kf: m1__keyed, t: number) {
-    requires no_overlap(out, input, kf)
+    requires disjoint(out, input, kf, 1)
     requires 1024 * t + 4096 <= 18446744073709551615
     ensures out = f8(kf.key, kf.r4, t, input)
     stack 544
 }
 
 contract h1(block: 64 bytes, src: n bytes, n: number) {
-    requires no_overlap(block, src)
+    requires disjoint(block, src, 1)
     requires n <= 64
     ensures block = f7(src)
     trace depends on n
@@ -30,13 +30,13 @@ contract h1(block: 64 bytes, src: n bytes, n: number) {
 }
 
 contract h3(out: cv, nd: m1__node120, root: byte) {
-    requires no_overlap(out, nd)
+    requires disjoint(out, nd, 1)
     ensures out = f1(nd, root)
     stack 0
 }
 
 contract h2(nd: m1__node120, input: len bytes, len: number, t: number, flags: byte) {
-    requires no_overlap(nd, input)
+    requires disjoint(nd, input, 1)
     requires len <= 1024
     ensures nd = f5(nd.r0, t, flags, input)
     trace depends on len
@@ -44,7 +44,7 @@ contract h2(nd: m1__node120, input: len bytes, len: number, t: number, flags: by
 }
 
 contract h5(out: cv, input: len bytes, len: number, kf: m1__keyed, t: number) {
-    requires no_overlap(out, input, kf)
+    requires disjoint(out, input, kf, 1)
     requires len >= 1
     requires 1024 * t + len <= 18446744073709551615
     ensures out = f10(kf.key, kf.r4, t, input)
@@ -54,7 +54,7 @@ contract h5(out: cv, input: len bytes, len: number, kf: m1__keyed, t: number) {
 }
 
 contract h6(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte) {
-    requires no_overlap(out, input, key)
+    requires disjoint(out, input, key, 1)
     requires len >= 1025
     ensures out = bytes_of(f0(words(key), flags, input))
     trace depends on len
@@ -10684,7 +10684,7 @@ s 0 1 1 1 1
 s 4 1 2 1024 1
 s 3 1 5 1 1
 q
-for ode_ckdrhllybtjzr7vgscyhlgz6sxqaga347kozoepvqk3b54ohbfra
+for ode_atjviztehovcdbhilsklolv27dydrtly3dw75bpu3nfzujbpij6a
 t live
 t live
 t live

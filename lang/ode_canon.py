@@ -587,12 +587,7 @@ class _Canon:
         vcount = [0]
         clauses = []
 
-        # 1. requires no_overlap(...) — sorted canonically by argument index.
-        if c["no_overlap"]:
-            no = sorted((env[x] for x in c["no_overlap"]), key=lambda s: int(s[1:]))
-            clauses.append(f"requires no_overlap({', '.join(no)})")
-
-        # 1b. requires aligned(buf, A) and requires line_disjoint(a, b, ..., L) — sorted canonically.
+        # 1. requires aligned(x, A) and requires disjoint(a, b, ..., G) — sorted canonically.
         if c.get("aligns"):
             al_pairs = sorted(
                 {(int(env[x][1:]), al, env[x]) for x, al in c["aligns"]},
@@ -600,19 +595,19 @@ class _Canon:
             )
             for _, al, cx in al_pairs:
                 clauses.append(f"requires aligned({cx}, {al})")
-        if c.get("line_disjoint"):
-            ld_items = sorted(
+        if c.get("disjoint"):
+            dj_items = sorted(
                 {
                     (
-                        line_sz,
+                        gran,
                         tuple(sorted((env[x] for x in bufs), key=lambda s: int(s[1:]))),
                     )
-                    for bufs, line_sz in c["line_disjoint"]
+                    for bufs, gran in c["disjoint"]
                 },
                 key=lambda t: (t[0], tuple(int(s[1:]) for s in t[1])),
             )
-            for line_sz, cbufs in ld_items:
-                clauses.append(f"requires line_disjoint({', '.join(cbufs)}, {line_sz})")
+            for gran, cbufs in dj_items:
+                clauses.append(f"requires disjoint({', '.join(cbufs)}, {gran})")
 
         # 2. requires exprs (canonicalized, sorted deterministically)
         req_lines = []
@@ -873,7 +868,7 @@ def render_with_glossary(canonical_text, glossary):
                                             "let", "if", "then", "else", "for", "in", "with",
                                             "requires", "ensures", "returns", "writes", "stack",
                                             "trace", "depends", "on", "result", "needs", "decreases",
-                                            "no_overlap", "aligned", "line_disjoint", "at", "below", "the", "least", "greatest",
+                                            "aligned", "disjoint", "at", "below", "the", "least", "greatest",
                                             "power", "of", "two", "fails"}
     for k, v in glossary.items():
         if k == "contract" or "." in k:

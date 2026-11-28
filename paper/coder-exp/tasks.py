@@ -43,7 +43,7 @@ TASKS = [
         "symbols": ["exp_mix_step_x86"],
         "spec": SPEC_MIX + """
 contract exp_mix_step_x86(out: block, d: block, a: block) {
-    requires no_overlap(out, d, a)
+    requires disjoint(out, d, a, 1)
     ensures out = mix_step(d, a)
     stack 0
     needs avx512
@@ -127,7 +127,7 @@ fn mix_step as "exp_mix_step_x86" {
         "symbols": ["exp_mix_step_arm"],
         "spec": SPEC_MIX + """
 contract exp_mix_step_arm(out: block, d: block, a: block) {
-    requires no_overlap(out, d, a)
+    requires disjoint(out, d, a, 1)
     ensures out = mix_step(d, a)
     stack 0
 }
@@ -362,7 +362,7 @@ fn lead_zeros as "exp_lead_zeros_arm" {
         "symbols": ["exp_pad16_x86"],
         "spec": SPEC_PAD16 + """
 contract exp_pad16_x86(out: 16 bytes, src: n bytes, n: number) {
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     requires n <= 16
     ensures out = pad16(src)
     trace depends on n
@@ -455,7 +455,7 @@ fn pad16 as "exp_pad16_x86" {
         "symbols": ["exp_pad16_arm"],
         "spec": SPEC_PAD16 + """
 contract exp_pad16_arm(out: 16 bytes, src: n bytes, n: number) {
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     requires n <= 16
     ensures out = pad16(src)
     trace depends on n
@@ -554,14 +554,14 @@ fn pad16 as "exp_pad16_arm" {
         "symbols": ["exp_step_x86", "exp_mix_twice_x86"],
         "spec": SPEC_MIX + """
 contract exp_step_x86(out: block, d: block, a: block) {
-    requires no_overlap(out, d, a)
+    requires disjoint(out, d, a, 1)
     ensures out = mix_step(d, a)
     stack 0
     needs avx512
 }
 
 contract exp_mix_twice_x86(out: block, d: block, a: block) {
-    requires no_overlap(out, d, a)
+    requires disjoint(out, d, a, 1)
     ensures out = mix_step(mix_step(d, a), a)
     stack 96
     needs avx512
@@ -685,13 +685,13 @@ fn mix_twice as "exp_mix_twice_x86" {
         "symbols": ["exp_step_arm", "exp_mix_twice_arm"],
         "spec": SPEC_MIX + """
 contract exp_step_arm(out: block, d: block, a: block) {
-    requires no_overlap(out, d, a)
+    requires disjoint(out, d, a, 1)
     ensures out = mix_step(d, a)
     stack 0
 }
 
 contract exp_mix_twice_arm(out: block, d: block, a: block) {
-    requires no_overlap(out, d, a)
+    requires disjoint(out, d, a, 1)
     ensures out = mix_step(mix_step(d, a), a)
     stack 96
 }

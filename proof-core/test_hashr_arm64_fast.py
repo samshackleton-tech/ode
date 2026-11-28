@@ -35,7 +35,7 @@ import test_hashr_arm64 as base_arm64
 HAVE_LEAN = os.path.isfile(os.path.join(HERE, ".lake", "build", "bin", "odeverify"))
 ARM_MACHINE = platform.machine() in ("arm64", "aarch64")
 CC = shutil.which("clang") or shutil.which("cc")
-CONTRACT_B32 = "ckdrhllybtjzr7vgscyhlgz6sxqaga347kozoepvqk3b54ohbfra"
+CONTRACT_B32 = "atjviztehovcdbhilsklolv27dydrtly3dw75bpu3nfzujbpij6a"
 HASH_ODE = os.path.join(FAST, "hash_fast_arm64.ode")
 KEPT_PROOF = os.path.join(FAST, "b3hashr_arm64_fast.proof")
 
@@ -154,13 +154,13 @@ class TestHashrArm64Fast(unittest.TestCase):
             # Control 3: drop `trace depends on len` from `hashr_arm64`
             old_tr = (
                 "fn hashr_arm64(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte)\n"
-                "    requires no_overlap(out, input, key)\n"
+                "    requires disjoint(out, input, key, 1)\n"
                 "    ensures out = bytes_of(b3.hash_words(words(key), flags, input))\n"
                 "    trace depends on len\n"
             )
             new_tr = (
                 "fn hashr_arm64(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte)\n"
-                "    requires no_overlap(out, input, key)\n"
+                "    requires disjoint(out, input, key, 1)\n"
                 "    ensures out = bytes_of(b3.hash_words(words(key), flags, input))\n"
             )
             self.assertEqual(orig_src.count(old_tr), 1)

@@ -10,7 +10,7 @@ layout of the record it writes are the ones in ../kcheck/proofs/inner.spec, as t
     layout node120 120 { h: cv at 0, block: 64 bytes at 32, counter: number at 96, length: number at 104 below 65, flags: byte at 112 }
 
     contract b3l_chunk_node(nd: node120, input: len bytes, len: number, t: number, flags: byte, plat: any) {
-        requires no_overlap(nd, input)
+        requires disjoint(nd, input, 1)
         requires len <= 1024
         ensures nd = chunk_node(nd.h, t, flags, input)
         trace depends on len, plat
@@ -71,7 +71,7 @@ def number_words(field, bound):
 ENSURES = (f"(call bytes_of (let record {RECORD} (bin ++ {field_words('h', 8)} (bin ++ {byte_words('block', 64)} "
            f"(bin ++ {number_words('counter', 2 ** 64)} (bin ++ {number_words('length', 65)} {number_words('flags', 256)}))))))")
 CONTRACT = ["arg nd inout 120", "arg input bytes len", "arg len number", "arg t number", "arg flags number", "arg plat number",
-            "below flags 256", "needs sse41", "needsif avx512 plat 5", "below len 1025", "hidden input", "hidden t", "hidden flags",
+            "below flags 256", "needs sse41", "needsif avx512 plat 5", "below len 1025", "disjoint nd input 1", "hidden input", "hidden t", "hidden flags",
             "ensuresw nd " + ENSURES, "stack 256"]
 NEEDS = "    stack 256\n    needs sse41\n    needs avx512 if plat == 5\n"
 # Why the verifier refuses, or what the prover cannot give it.
@@ -207,8 +207,8 @@ class Statement(unittest.TestCase):
         self.assertIn("(call chunk (name key) (call counter (name t)) (name flags) (call CHUNK_START) (num 0) (num 64) (bin - (name n) (num 1))", defs["chunk_node"])
 
     def test_no_overlap_must_be_said(self):
-        with self.assertRaises(SystemExit) as e: statement.statement(spec_text(once("    requires no_overlap(nd, input)\n", "")), FUNCTIONS)
-        self.assertIn("does not say `requires no_overlap(nd, input)`", str(e.exception))
+        with self.assertRaises(SystemExit) as e: statement.statement(spec_text(once("    requires disjoint(nd, input, 1)\n", "")), FUNCTIONS)
+        self.assertIn("does not say `requires disjoint(nd, input, 1)`", str(e.exception))
 
 
 @unittest.skipUnless(lean_verify.LAKE, "Lean's lake is not installed")

@@ -425,7 +425,7 @@ def pad64(src) {
 }
 
 fn brotli_copy_block64(out: 64 bytes, src: n bytes, n: number)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     requires n <= 64
     ensures out = pad64(src)
     trace depends on n

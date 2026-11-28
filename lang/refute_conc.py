@@ -128,6 +128,10 @@ def _make_cases(contract, n_cases=16, seed=1):
     }
     len_vars = {k[1] for _, k in kinds if k[0] == "bytes" and isinstance(k[1], str)}
     lo_b, hi_b = _extract_num_bounds(contract)
+    num_align = {}
+    for aname, al in (contract.get("aligns") or ()):
+        if al > num_align.get(aname, 1):
+            num_align[aname] = al
     rng = random.Random(seed)
 
     # Structured edge patterns first (catches off-by-one, empty, zero/nonzero, equal/differing, Base64/IPv4)
@@ -142,16 +146,28 @@ def _make_cases(contract, n_cases=16, seed=1):
         if len(cases) >= n_cases:
             break
         env = {}
-        # 1. Assign numbers, 32-bit words, and 64-bit counters (respecting `requires` bounds)
+        # 1. Assign numbers, 32-bit words, and 64-bit counters (respecting `requires` bounds and alignments)
         for name, k in kinds:
             if k[0] == "number":
+                al = num_align.get(name, 1)
                 l = lo_b.get(name, 0)
-                h = hi_b.get(name, 48 if name in len_vars else 1000)
+                if al > 1 and l % al != 0:
+                    l = ((l + al - 1) // al) * al
+                h = hi_b.get(name, max(l, (48 if name in len_vars else max(1000, al * 4))))
                 if h < l:
                     h = l
-                cap_h = min(h, l + (64 if name in len_vars else 1000))
-                if l == h:
+                cap_h = min(h, l + max(64 if name in len_vars else 1000, al * 4))
+                if al > 1:
+                    cap_h = (cap_h // al) * al
+                    if cap_h < l:
+                        cap_h = l
+                if l == h or l == cap_h:
                     env[name] = l
+                elif al > 1:
+                    q_lo, q_hi = l // al, cap_h // al
+                    q_cands = [q for q in [q_lo, q_lo + 1, 0, 1, 2, q_hi] if q_lo <= q <= q_hi]
+                    q = q_cands[ci] if ci < len(q_cands) else rng.randint(q_lo, q_hi)
+                    env[name] = q * al
                 elif name in len_vars:
                     cands = [v for v in edge_lens if l <= v <= cap_h]
                     if l not in cands:
@@ -303,8 +319,12 @@ def refute_function(programs, symbol, spec_text, target, cases=16, seed=1, max_s
         sp_entry = 0x70000000
         init_regs[sp_name] = sp_entry
 
-        base = 0x100000
-        step = 0x10400
+        gran = max(
+            [64]
+            + [al for _, al in (contract.get("aligns") or ())]
+            + [g for _, g in (contract.get("disjoint") or ())]
+        )
+        cur_addr = ((0x100000 + gran - 1) // gran) * gran
         for idx, (name, k) in enumerate(kinds):
             reg = arg_regs[idx]
             if k[0] == "number":
@@ -315,14 +335,15 @@ def refute_function(programs, symbol, spec_text, target, cases=16, seed=1, max_s
                 cval = env[name]
                 init_regs[reg] = (cval.lo.v & 0xFFFFFFFF) | ((cval.hi.v & 0xFFFFFFFF) << 32)
             elif k[0] == "bytes":
-                addr = base + idx * step
+                addr = cur_addr
                 init_regs[reg] = addr
                 bs = env[name]
                 for i, b in enumerate(bs):
                     init_mem[addr + i] = b & 0xFF
                 buf_info[name] = (addr, len(bs), "bytes")
+                cur_addr += max(gran, ((len(bs) + gran - 1) // gran) * gran)
             elif k[0] == "words":
-                addr = base + idx * step
+                addr = cur_addr
                 init_regs[reg] = addr
                 ws = env[name]
                 for i, w in enumerate(ws):
@@ -330,6 +351,7 @@ def refute_function(programs, symbol, spec_text, target, cases=16, seed=1, max_s
                     for j in range(4):
                         init_mem[addr + i * 4 + j] = raw[j]
                 buf_info[name] = (addr, len(ws) * 4, "words")
+                cur_addr += max(gran, ((len(ws) * 4 + gran - 1) // gran) * gran)
 
         tr = estimate.trace_memory(programs, symbol, target, init_regs=init_regs, init_mem=init_mem, max_steps=max_steps)
 

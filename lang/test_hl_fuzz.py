@@ -329,7 +329,7 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
             body_s = "\n".join(stmts)
             src = (
                 f"fn pack_f(out: {out_len} bytes, inp: 32 bytes, k0: u64) -> u64\n"
-                f"    requires no_overlap(out, inp)\n"
+                f"    requires disjoint(out, inp, 1)\n"
                 f"    returns 0\n"
                 f"    trace depends on out, inp, k0\n"
                 f"{{\n"
@@ -578,7 +578,7 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
             src = (
                 'use vec = "7zpczpzr6tshzr6ew4fnhluakp3vs4q3xu4pndhflmztv6rdpqra"  // std/vec.ode\n'
                 "fn vec_fuzz(out: 16 bytes, inp: 32 bytes, lo64: u64, hi64: u64)\n"
-                "    requires no_overlap(out, inp)\n"
+                "    requires disjoint(out, inp, 1)\n"
                 "    trace depends on nothing\n"
                 "{\n" + "\n".join(lines) + "\n}\n"
             )

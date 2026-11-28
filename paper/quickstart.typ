@@ -203,7 +203,7 @@ High-Level Ode lowers statements deterministically in written order with lexical
     [Bitwise & shifts], [`a & b`, `a | b`, `a ^ b`, `a << k`, `a >> k`], [Exact bitmasks (`& (2^w - 1)`), contiguous bitfields, and constant power-of-two shifts.],
     [Branchless select], [`select(cond, a, b)`], [Lowers directly to `cmov*` (`x86_64`) / `csel` (`arm64`); safe on values kept out of the trace.],
     [Scalar memory], [`a[i]`, `a.u16(i)`, `a.u32(i)`, `a.u64(i)`, `out[i] := v`, `out.u64(i) := v`], [1/2/4/8-byte little-endian loads uniformly across read-only, in-out (before and after partial writes), and stack slots; pure write-only `out` stays unreadable before write.],
-    [Cache-line & page contracts], [`requires aligned(buf, 64)`, `requires aligned(pg, 4096)`, `requires line_disjoint(a, b, 64)`], [`aligned(buf, A)` (`A` in `8..16384`) proves `buf & (A-1) == 0`; `line_disjoint` prevents false sharing across 64 B or 128 B cache lines and propagates across aligned arena sub-slices.],
+    [Cache-line & page contracts], [`requires aligned(buf, 64)`, `requires aligned(pg, 4096)`, `requires disjoint(a, b, 64)`], [`aligned(buf, A)` (`A` in `8..16384`) proves `buf & (A-1) == 0`; `line_disjoint` prevents false sharing across 64 B or 128 B cache lines and propagates across aligned arena sub-slices.],
     [Counted loop], [`for i in lo..hi [step k] [maintains ...] [writes ...] { ... }`], [Auto-tracks `lo <= i <= hi`, step alignment, `decreases hi - i`, and invariant outer `if`-guards and `let` equalities.],
     [Compile-time unroll], [`for i in 0..N [step k] unroll { ... }`], [Expands straight-line at compile time with constant folding on `i` and zero loop overhead.],
     [General loop & join], [`while cond [maintains ...] decreases E`, `join maintains f1, f2`], [`while` proves termination via `decreases E`; `join` merges sequential `if/else` diamonds linearly (`2k` instead of `2^k` paths).],
@@ -326,7 +326,7 @@ Without executing the binary, `ode advise --asm --all-archs` prints the variable
 ])[
   Use `--arch NAME` to focus on one microarchitecture (`zen5`, `zen4`, `zen3`, `icelake`, `apple_m`, `ampere1`). The highest-payoff optimizations appear directly in `ode advise --asm`:
   - *Eliminate spills:* inspect `variables:` and shorten live ranges or use `for ... unroll` so hot state stays in caller-saved registers (`stack 0 B`, zero spills).
-  - *Avoid cache and forwarding hazards:* watch for `stlf-width` (narrow stack write overlapping a wider stack read), `line-split`, `stream-count`, and `stride-4k-alias`; declare `requires aligned(buf, 64)` and `requires line_disjoint(a, b, 64)` on partitioned buffers.
+  - *Avoid cache and forwarding hazards:* watch for `stlf-width` (narrow stack write overlapping a wider stack read), `line-split`, `stream-count`, and `stride-4k-alias`; declare `requires aligned(buf, 64)` and `requires disjoint(a, b, 64)` on partitioned buffers.
   - *Interleave independent chains:* process 2–4 lanes or blocks side by side (as in 4-way NEON or 512-bit AVX-512 ChaCha20 and BLAKE3) to hide ALU/vector latency and fill execution ports.
   - *Keep hot loops branchless:* replace data-dependent branches with `select(cond, a, b)` and single-compare wrapping checks `(c -% lo) <= hi - lo`.
 ]

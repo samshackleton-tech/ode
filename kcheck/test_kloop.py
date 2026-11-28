@@ -113,7 +113,7 @@ class Kloop(unittest.TestCase):
         import kspec, ode
         true = kspec.SPEC
         text = ode.source()
-        k32 = "contract blake3_servil_avx512_k32(inputs: 32 inputs, n: number, key: cv, t: counter, packed: bytes flags start end length, out: 32 cvs) {\n    requires n >= 1\n    requires no_overlap(inputs, key, out)\n    ensures out[i] = chunk(key, t + i, flags, start, end, length, n, inputs[i]) for i in 0..32"
+        k32 = "contract blake3_servil_avx512_k32(inputs: 32 inputs, n: number, key: cv, t: counter, packed: bytes flags start end length, out: 32 cvs) {\n    requires n >= 1\n    requires disjoint(inputs, key, out, 1)\n    ensures out[i] = chunk(key, t + i, flags, start, end, length, n, inputs[i]) for i in 0..32"
         self.assertEqual(text.count(k32), 1)
         rows, data, entry = self.k32
         try:

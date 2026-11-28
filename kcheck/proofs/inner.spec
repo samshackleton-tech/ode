@@ -40,7 +40,7 @@ layout keyed 40 { key: cv at 0, flags: byte at 32 }
 // P32 is the same code entered a little later, and gives every lane t; P16 has sixteen lanes.
 contract blake3_servil_avx512_k32(inputs: 32 inputs, n: number, key: cv, t: counter, packed: bytes flags start end length, out: 32 cvs) {
     requires n >= 1
-    requires no_overlap(inputs, key, out)
+    requires disjoint(inputs, key, out, 1)
     ensures out[i] = chunk(key, t + i, flags, start, end, length, n, inputs[i]) for i in 0..32
     trace depends on n
     stack 4096
@@ -49,7 +49,7 @@ contract blake3_servil_avx512_k32(inputs: 32 inputs, n: number, key: cv, t: coun
 
 contract blake3_servil_avx512_p32(inputs: 32 inputs, n: number, key: cv, t: counter, packed: bytes flags start end length, out: 32 cvs) {
     requires n >= 1
-    requires no_overlap(inputs, key, out)
+    requires disjoint(inputs, key, out, 1)
     ensures out[i] = chunk(key, t, flags, start, end, length, n, inputs[i]) for i in 0..32
     trace depends on n
     stack 4096
@@ -58,7 +58,7 @@ contract blake3_servil_avx512_p32(inputs: 32 inputs, n: number, key: cv, t: coun
 
 contract blake3_servil_avx512_p16(inputs: 16 inputs, n: number, key: cv, t: counter, packed: bytes flags start end length, out: 16 cvs) {
     requires n >= 1
-    requires no_overlap(inputs, key, out)
+    requires disjoint(inputs, key, out, 1)
     ensures out[i] = chunk(key, t, flags, start, end, length, n, inputs[i]) for i in 0..16
     trace depends on n
     stack 4096
@@ -73,14 +73,14 @@ contract blake3_servil_output16(nodes: 16 descriptors, out: 16 cvs) {
 }
 
 contract blake3_servil_compress_in_place_avx512(h: cv, m: block, length: low byte, t: counter, flags: low byte) {
-    requires no_overlap(h, m)
+    requires disjoint(h, m, 1)
     ensures h = compress(h, m, t, length, flags)
     stack 0
     needs avx512
 }
 
 contract blake3_servil_compress_in_place_sse41(h: cv, m: block, length: word, t: counter, flags: low word) {
-    requires no_overlap(h, m)
+    requires disjoint(h, m, 1)
     ensures h = compress(h, m, t, length, flags)
     stack 0
     needs sse41
@@ -89,7 +89,7 @@ contract blake3_servil_compress_in_place_sse41(h: cv, m: block, length: word, t:
 // The hash of a message, written to be proved (hash.ode): a chunk's node and its value, and the tree by the
 // specification's own two parts.
 contract b3l_pad(block: 64 bytes, src: n bytes, n: number) {
-    requires no_overlap(block, src)
+    requires disjoint(block, src, 1)
     requires n <= 64
     ensures block = padded(src)
     trace depends on n
@@ -97,7 +97,7 @@ contract b3l_pad(block: 64 bytes, src: n bytes, n: number) {
 }
 
 contract b3l_chunk_node(nd: node120, input: len bytes, len: number, t: number, flags: byte, plat: any) {
-    requires no_overlap(nd, input)
+    requires disjoint(nd, input, 1)
     requires len <= 1024
     ensures nd = chunk_node(nd.h, t, flags, input)
     trace depends on len, plat
@@ -107,7 +107,7 @@ contract b3l_chunk_node(nd: node120, input: len bytes, len: number, t: number, f
 }
 
 contract b3l_node_out(out: cv, nd: node120, root: byte, plat: any) {
-    requires no_overlap(out, nd)
+    requires disjoint(out, nd, 1)
     ensures out = node_value(nd, root)
     trace depends on plat
     stack 128
@@ -116,7 +116,7 @@ contract b3l_node_out(out: cv, nd: node120, root: byte, plat: any) {
 }
 
 contract b3l_wide32(out: cv, input: 32768 bytes, kf: keyed, t: number) {
-    requires no_overlap(out, input, kf)
+    requires disjoint(out, input, kf, 1)
     requires 1024 * t + 32768 <= 18446744073709551615
     ensures out = subtree(kf.key, kf.flags, t, input)
     trace depends on t
@@ -125,7 +125,7 @@ contract b3l_wide32(out: cv, input: 32768 bytes, kf: keyed, t: number) {
 }
 
 contract b3l_wide128(out: cv, input: 131072 bytes, kf: keyed, t: number) {
-    requires no_overlap(out, input, kf)
+    requires disjoint(out, input, kf, 1)
     requires 1024 * t + 131072 <= 18446744073709551615
     ensures out = subtree(kf.key, kf.flags, t, input)
     trace depends on t
@@ -135,7 +135,7 @@ contract b3l_wide128(out: cv, input: 131072 bytes, kf: keyed, t: number) {
 
 // `cvs`: the address of chaining values, one after another, of which the contract says what each is.
 contract b3l_take(out: cv, input: len bytes, len: number, kf: keyed, t: number, cvs: cvs) {
-    requires no_overlap(out, input, kf, cvs)
+    requires disjoint(out, input, kf, cvs, 1)
     requires len >= 1
     requires 1024 * t + len <= 18446744073709551615
     requires cvs[i] == node_value(chunk_node(kf.key, t + i, kf.flags, input[1024 * i .. 1024 * i + 1024]), 0) for i in 0..len / 1024
@@ -148,7 +148,7 @@ contract b3l_take(out: cv, input: len bytes, len: number, kf: keyed, t: number, 
 }
 
 contract b3l_part32(out: cv, input: len bytes, len: number, kf: keyed, t: number) {
-    requires no_overlap(out, input, kf)
+    requires disjoint(out, input, kf, 1)
     requires len >= 1025
     requires len <= 32768
     requires 1024 * t + len <= 18446744073709551615
@@ -160,7 +160,7 @@ contract b3l_part32(out: cv, input: len bytes, len: number, kf: keyed, t: number
 }
 
 contract b3l_subtree(out: cv, input: len bytes, len: number, kf: keyed, t: number, plat: any) {
-    requires no_overlap(out, input, kf)
+    requires disjoint(out, input, kf, 1)
     requires len >= 1
     requires 1024 * t + len <= 18446744073709551615
     ensures out = subtree(kf.key, kf.flags, t, input)

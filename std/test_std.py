@@ -73,7 +73,7 @@ def vec_spec(ws, c0, c1) {
 }
 
 fn f_vec_all(out: 16 bytes, src: 16 bytes, c0: counter, c1: counter)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = bytes_of(vec_spec(words(src), c0, c1))
     trace depends on nothing
 {
@@ -106,7 +106,7 @@ def tr4(ws) {
 }
 
 fn f_transpose(out: 64 bytes, src: 64 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = bytes_of(tr4(words(src)))
     trace depends on nothing
 {
@@ -136,7 +136,7 @@ def rot_spec(ws) {
 }
 
 fn f_rot_lanes(out: 16 bytes, src: 16 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = bytes_of(rot_spec(words(src)))
     trace depends on nothing
 {
@@ -163,7 +163,7 @@ def sum12_tr(ws) {
 }
 
 fn f_tr_12live(out: 16 bytes, src: 192 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = bytes_of(sum12_tr(words(src)))
     trace depends on nothing
 {
@@ -193,7 +193,7 @@ use vec = "__H_VEC__"  // std/vec.ode
 def r12(ws) { [ws[i] >>> 12 for i in 0..4] }
 
 fn f_rotr_avx512(out: 16 bytes, src: 16 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = bytes_of(r12(words(src)))
     trace depends on nothing
     for x86_64 needs avx512 {

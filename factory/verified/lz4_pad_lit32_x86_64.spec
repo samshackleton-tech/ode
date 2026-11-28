@@ -3,7 +3,7 @@
 def pad32(src) { [if i < len(src) then src[i] else 0 for i in 0..32] }
 
 contract ode_lz4_pad_lit32(out: 32 bytes, src: n bytes, n: number) {
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     requires n <= 32
     ensures out = pad32(src)
     trace depends on n

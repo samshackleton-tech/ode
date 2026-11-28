@@ -1,6 +1,6 @@
 // Incremental BLAKE3 CvStack finalization (`cv_finalize`) for x86-64 and AArch64.
-use b3 = "ya6gqve7vxwsty67gvln6hr4lxkvo2vmknwk4l3prxrvtmuetiqq"  // blake3_spec.ode
-use cvspec = "5tpdkdrx6hw6fwbxri6ub5cjpas3ev5zbc4mtjlscsymqkw6dngq"  // cv_stack_spec.ode
+use b3 = "2foz4xsr64wppbos355toq2edgzfhdhbtzyfj4lkgx62cvcfbrpq"  // blake3_spec.ode
+use cvspec = "nvc6cjpfpfb2ux4b2gcngquucqlua7dg2ugdhz6fftk2rjishu6q"  // cv_stack_spec.ode
 
 data cv_iv = 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A
 
@@ -75,7 +75,7 @@ inline fn permute_msg for arm64 (m0: vec, m1: vec, m2: vec, m3: vec, t0: vec, t1
 }
 
 fn compress1(h: cv, m: block, length: word, t: counter, flags: low word)
-    requires no_overlap(h, m)
+    requires disjoint(h, m, 1)
     ensures h = b3.compress(h, m, t, length, flags)
     trace depends on nothing
     stack 0
@@ -226,7 +226,7 @@ fn compress1(h: cv, m: block, length: word, t: counter, flags: low word)
 }
 
 fn copy32(dst: 32 bytes, src: m bytes, m: number)
-    requires no_overlap(dst, src)
+    requires disjoint(dst, src, 1)
     requires m <= 32
     ensures dst = cvspec.id_bytes(src)
     trace depends on m
@@ -293,7 +293,7 @@ fn copy32(dst: 32 bytes, src: m bytes, m: number)
 }
 
 fn node_out(out: cv, nd: cvspec.parent104, extra: byte)
-    requires no_overlap(out, nd)
+    requires disjoint(out, nd, 1)
     ensures out = cvspec.parent_val(nd, extra)
     trace depends on nothing
     stack 0
@@ -325,7 +325,7 @@ fn node_out(out: cv, nd: cvspec.parent104, extra: byte)
 }
 
 fn parent_node(nd: cvspec.parent104, left: m bytes, m: number, right: cv, key: cv, flags: byte)
-    requires no_overlap(nd, left, right, key)
+    requires disjoint(nd, left, right, key, 1)
     requires m <= 32
     ensures nd = cvspec.parent_nd(key, flags, left, right)
     trace depends on m
@@ -398,7 +398,7 @@ fn parent_node(nd: cvspec.parent104, left: m bytes, m: number, right: cv, key: c
 }
 
 fn cv_finalize(acc: cv, stack: n bytes, n: number, top: number, kf: b3.keyed, budget: number)
-    requires no_overlap(acc, stack, kf)
+    requires disjoint(acc, stack, kf, 1)
     requires n >= 32 * top
     requires 1 <= top
     requires top <= 54

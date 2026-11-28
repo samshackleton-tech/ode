@@ -281,8 +281,12 @@ class Machine:
         self.low, self.pc, self.steps, self.back = 0, None, 0, {}
         # the things at the addresses given are taken not to overlap: the contract must ask it of the caller
         addresses = [name for _, kind, name in c.args if kind not in ("number", "byte", "any", "counter", "low byte", "word", "low word") and packed_kind(kind) is None]
-        if len(addresses) > 1 and sorted(c.text["no_overlap"] or []) != sorted(addresses):
-            raise Fail(f"{c.name}: the contract does not say `requires no_overlap({', '.join(addresses)})`: the things at the addresses it is given are taken not to overlap")
+        dp = ode.disjoint_pairs(c.text)
+        if len(addresses) > 1:
+            missing = [(addresses[i], addresses[j]) for i in range(len(addresses)) for j in range(i + 1, len(addresses))
+                       if ((addresses[i], addresses[j]) if addresses[i] < addresses[j] else (addresses[j], addresses[i])) not in dp]
+            if missing:
+                raise Fail(f"{c.name}: the contract does not say `requires disjoint({', '.join(addresses)}, 1)`: the things at the addresses it is given are taken not to overlap")
         A = self.A()
         for reg, kind, name in c.args:               # numbers first: a count of bytes may be named before it is given
             if kind == "number":
@@ -803,13 +807,15 @@ class Machine:
 
     def no_overlap(self, name, first, others):
         """Two sets of (region, offset, bytes) have no byte in common."""
-        mine_apart = set(self.contract.text["no_overlap"] or ())
+        mine_dp = ode.disjoint_pairs(self.contract.text)
         top = lambda r: r[0] if isinstance(r, tuple) else r
         for region, off, size in first:
             for r, o, n in others:
                 if r != region:
-                    if r != "frame" and region != "frame" and top(r) != top(region) and (top(r) not in mine_apart or top(region) not in mine_apart):
-                        raise Fail(f"{name}: this function's contract does not say {top(region)} and {top(r)} have no byte in common")
+                    if r != "frame" and region != "frame" and top(r) != top(region):
+                        a, b = top(region), top(r)
+                        if ((a, b) if a < b else (b, a)) not in mine_dp:
+                            raise Fail(f"{name}: this function's contract does not say {a} and {b} have no byte in common")
                     continue
                 if size is None or n is None:
                     raise Fail(f"{name}: two arguments in {region} are not shown to have no byte in common")
@@ -939,9 +945,8 @@ class Machine:
                 span = (a[1], plain(Lin.of(a[2]) + a_i.scale(32)), (b_i - a_i).scale(32))
             self.own_span(name, *span)
             spans[arg] = [span]
-        ap = c.text["no_overlap"] or []
-        for idx, x in enumerate(ap):
-            for y in ap[idx + 1:]: self.no_overlap(name, spans[x], spans[y])
+        for (x, y) in ode.disjoint_pairs(c.text):
+            self.no_overlap(name, spans[x], spans[y])
         for arg in c.writes: self.no_overlap(name, spans[arg], [s for other, ss in spans.items() if other != arg for s in ss])
         if name == self.contract.name: self.lessens(A, name, c, v)
         for arg, clause in c.given.items(): self.told(A, name, c, clause, where[arg], v)

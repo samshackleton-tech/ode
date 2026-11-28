@@ -2149,7 +2149,7 @@ theorem symCallL_pre {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
   have hslot := F.slot
   have h8 : c.slot ≤ st.reg RSP := by omega
   refine ⟨afterCall_rip p q i st, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, afterCall_aligned F p q, hex.preLines,
-    (fun _ _ _ _ _ m => by rw [hva] at m; cases m), hex.aligns, hex.lineDisjoint⟩
+    (fun _ _ _ _ _ m => by rw [hva] at m; cases m), hex.aligns, hex.disjoint⟩
   · exact afterCall_small F.link H.small
   · rw [s1rsp]; omega
   · rw [s1rsp]; omega
@@ -2574,8 +2574,13 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
   have C := symKnow_sound (ctx := ctx) KNOWN e1 H wf
   obtain ⟨_, r2, e2, h⟩ := V.bind_ok h
-  obtain ⟨hex, hdec⟩ := callPreOk_sound E F C.holds e2
-  obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall'_sound E h C.holds C.wf q hq i F hret hex
+  obtain ⟨s', r3, e3, h⟩ := V.bind_ok h
+  obtain ⟨_, r4, e4, h⟩ := V.bind_ok h
+  have hs' : s' = s' := rfl
+  simp only [Pure.pure, V.pure, Except.ok.injEq, Prod.mk.injEq] at h
+  rcases h with ⟨rfl, _⟩
+  obtain ⟨hex, hdec⟩ := callPreOk_sound E F C.holds e2 e4
+  obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall'_sound E e3 C.holds C.wf q hq i F hret hex
   refine ⟨h8, hw, hpre, hdec, hread, hwrite, fun s2 p2 d2 => ?_⟩
   obtain ⟨hrip, ρ', C'⟩ := hpost s2 p2 d2
   exact ⟨hrip, ρ', ⟨Agree.mono C.mono C'.agree, Nat.le_trans C.mono C'.mono, C'.holds, C'.wf⟩⟩

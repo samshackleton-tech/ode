@@ -5,7 +5,7 @@
 layout tagged 64 { tag: cv at 0, h: cv at 32 }
 
 contract ode_absorb(r: tagged, m: block, m2: block) {
-    requires no_overlap(r, m, m2)
+    requires disjoint(r, m, m2, 1)
     ensures r = {tag: r.tag, h: compress(compress(r.h, m, counter(0), 64, 0), m2, counter(0), 64, 0)}
     stack 32
     needs sse41

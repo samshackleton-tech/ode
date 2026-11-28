@@ -30,7 +30,7 @@ FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), SSE41), (os.path.join(RECORD, "
 NEW = ("(record (tag (call words (slice (name r) (num 0) (num 32)))) (h (call compress (call compress "
        "(call words (slice (name r) (num 32) (num 64))) (call words (name m)) "
        "(call counter (num 0)) (num 64) (num 0)) (call words (name m2)) (call counter (num 0)) (num 64) (num 0))))")
-CONTRACT = ["arg r inout 64", "arg m fixed 64", "arg m2 fixed 64", "needs sse41", "hidden m", "hidden m2",
+CONTRACT = ["arg r inout 64", "arg m fixed 64", "arg m2 fixed 64", "needs sse41", "disjoint r m 1", "disjoint r m2 1", "disjoint m m2 1", "hidden m", "hidden m2",
             f"ensuresw r (call bytes_of (let record {NEW} (bin ++ "
             "(ifx (bin == (call len (field (name record) tag)) (num 8)) (field (name record) tag) (index (list (num 0)) (num 1))) "
             "(ifx (bin == (call len (field (name record) h)) (num 8)) (field (name record) h) (index (list (num 0)) (num 1))))))",
@@ -117,8 +117,8 @@ class Statement(unittest.TestCase):
 
     def test_a_record_that_is_written_overlaps_nothing_else(self):
         # what is written is taken to overlap nothing else given: the contract must ask it of the caller
-        with self.assertRaises(SystemExit) as e: statement.statement(spec_text(once("no_overlap(r, m, m2)", "no_overlap(r, m)")), FUNCTIONS)
-        self.assertIn("does not say `requires no_overlap(r, m, m2)`", str(e.exception))
+        with self.assertRaises(SystemExit) as e: statement.statement(spec_text(once("disjoint(r, m, m2, 1)", "disjoint(r, m, 1)")), FUNCTIONS)
+        self.assertIn("does not say `requires disjoint(r, m, m2, 1)`", str(e.exception))
 
     def test_a_layout_this_reader_does_not_take_for_a_written_record(self):
         # bytes that are not whole words, and fields that leave a gap: said, not guessed at

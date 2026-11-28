@@ -33,7 +33,7 @@ FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), PAD), (os.path.join(TAIL, "odet
 # the record the contract says the run becomes, as statement.py writes it (`r.h`: the field of the record at entry);
 # the record is had once, by a `let`, and its bytes are those of its fields' words
 NEW = "(record (h (call words (slice (name r) (num 0) (num 32)))) (block (call padded (slice (name src) (num 16) (name len)))))"
-CONTRACT = ["arg r inout 96", "arg src bytes len", "arg len number", "atleast len 17", "below len 81", "hidden src",
+CONTRACT = ["arg r inout 96", "arg src bytes len", "arg len number", "atleast len 17", "below len 81", "disjoint r src 1", "hidden src",
             f"ensuresw r (call bytes_of (let record {NEW} (bin ++ "
             "(ifx (bin == (call len (field (name record) h)) (num 8)) (field (name record) h) (index (list (num 0)) (num 1))) "
             "(ifx (bin == (call len (field (name record) block)) (num 64)) (call words (field (name record) block)) (index (list (num 0)) (num 1))))))",

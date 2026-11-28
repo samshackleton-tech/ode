@@ -116,7 +116,7 @@ class HashrFastTests(unittest.TestCase):
             )
             self.assertEqual(res["verdict"], "shown", res)
             self.assertEqual(list(res["verifiers"].keys()), ["odeverify", "verify2"])
-            self.assertEqual(res["contract_b32"], "7jb2pyzuwz6tqd3qmjsra3mk36tl4547sfpy3at5scbk772lbila")
+            self.assertEqual(res["contract_b32"], "mzh6fxqvscdszutepexkpxljcirwbl5sho2djt633xysq7c5rvta")
             self.assertEqual(res["coverage"]["functions"], 19)
             self.assertEqual(res["coverage"]["local_helpers"], 18)
             self.assertEqual(res["coverage"]["exported_symbols"], 1)

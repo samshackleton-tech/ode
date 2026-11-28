@@ -8,19 +8,19 @@ def fold32(x) { [x[i] ^ x[i + 8] for i in 0..8] }
 def diff32(a, b) { fold32(xor64(a, b)) }
 
 contract v_xor64(out: block, a: block, b: block) {
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     ensures out = xor64(a, b)
     stack 0
 }
 
 contract v_fold32(out: cv, x: block) {
-    requires no_overlap(out, x)
+    requires disjoint(out, x, 1)
     ensures out = fold32(x)
     stack 0
 }
 
 contract v_diff32(out: cv, a: block, b: block) {
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     ensures out = diff32(a, b)
     stack 80
 }

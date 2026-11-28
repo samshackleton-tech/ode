@@ -81,7 +81,7 @@ their constants, their names, the specification, the proof, and nothing for a li
 Apple M6 that `b3l_hashr` in that file meets its public contract:
 
     contract b3l_hashr(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte, plat: any) {
-        requires no_overlap(out, input, key)
+        requires disjoint(out, input, key, 1)
         ensures out = bytes_of(hash_words(words(key), flags, input))
         trace depends on len, flags, plat
         stack 18688 + 384 * bits(len / 1024)
@@ -1706,7 +1706,7 @@ were written; what they showed is shown now by `kfn.py`).
 - The machine learned what the kernels use: ZMM registers as sixteen terms, mask registers, a frame on a
   64-byte boundary, the file's read-only data, 32-bit moves and shifts, a kernel's kinds of argument, and
   the older SSE4.1 forms (a rotation as two shifts and an or; a shuffle of bytes that rotates words).
-- The kernels' contracts say `requires no_overlap(...)`, as `kfn.py` asks of every function. One thing is
+- The kernels' contracts say `requires disjoint(...)`, as `kfn.py` asks of every function. One thing is
   taken of a table of inputs and not written: the n blocks of an input lie in memory one after another, so
   64 * n is below 2^64 (the callers, which name each block they give, show the blocks are there).
 - `python3 verify.py b3hashr.o` now loads **3,072 lines of code in 10 files** (3,461 in 11 before; with the

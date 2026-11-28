@@ -1,5 +1,5 @@
 // Incremental BLAKE3 CvStack finalization specification.
-use b3 = "ya6gqve7vxwsty67gvln6hr4lxkvo2vmknwk4l3prxrvtmuetiqq"  // blake3_spec.ode
+use b3 = "2foz4xsr64wppbos355toq2edgzfhdhbtzyfj4lkgx62cvcfbrpq"  // blake3_spec.ode
 
 layout parent104 104 {
     h: cv at 0,

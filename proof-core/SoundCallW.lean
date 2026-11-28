@@ -2982,7 +2982,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             rw [s1r]; have := hout.2; omega)
         have hpre : c.pre q (afterCall p q i st) := by
           refine ⟨afterCall_rip p q i st, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, hex.mbounds,
-            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), hex.atLeast, afterCall_aligned F p q, hex.preLines, hva_pre, hex.aligns, hex.lineDisjoint⟩
+            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), hex.atLeast, afterCall_aligned F p q, hex.preLines, hva_pre, hex.aligns, hex.disjoint⟩
           · exact afterCall_small F.link H.small
           · rw [s1rsp]; omega
           · rw [s1rsp]; omega
@@ -3378,7 +3378,7 @@ theorem symCallF'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             rw [s1r]; omega)
         have hpre : c.pre q (afterCall p q i st) := by
           refine ⟨afterCall_rip p q i st, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, hex.mbounds,
-            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), hex.atLeast, afterCall_aligned F p q, hex.preLines, hva_pre, hex.aligns, hex.lineDisjoint⟩
+            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), hex.atLeast, afterCall_aligned F p q, hex.preLines, hva_pre, hex.aligns, hex.disjoint⟩
           · exact afterCall_small F.link H1.small
           · rw [s1rsp]; omega
           · rw [s1rsp]; omega
@@ -4175,7 +4175,7 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         have hpre : c.pre q (afterCall p q i st) := by
           refine ⟨afterCall_rip p q i st, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_,
             (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), hex.atLeast, afterCall_aligned F p q, hex.preLines,
-            (fun _ _ _ _ _ m => by rw [hva] at m; cases m), hex.aligns, hex.lineDisjoint⟩
+            (fun _ _ _ _ _ m => by rw [hva] at m; cases m), hex.aligns, hex.disjoint⟩
           · exact afterCall_small F.link H.small
           · rw [s1rsp]; omega
           · rw [s1rsp]; omega

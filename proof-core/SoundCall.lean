@@ -48,14 +48,14 @@ def CalleesMeetAt (world : List Program) (ctx : Ctx) (s0 : State) : Prop :=
     ∃ q, findProgram world name = some q ∧ q.fits ∧ MeetsBelow world ctx.pieces c ctx.defs q (ctx.recBound name c s0)
 
 /-- Callee entry preconditions checked uniformly by `callPreOk`: stack fit, `mbounds`, `atLeast`,
-`preLines`, `aligns`, and `lineDisjoint`. -/
+`preLines`, `aligns`, and `disjoint`. -/
 structure CallExtra (ctx : Ctx) (s0 st : State) (c : Contract) (st1 : State) : Prop where
   stack : (st.reg RSP : Int) ≤ s0.reg RSP ∧ -(ctx.contract.stackAt s0 : Int) ≤ (st.reg RSP : Int) - s0.reg RSP - c.slot - (c.stackAt st1 : Int)
   mbounds : ∀ x off b, (x, off, b) ∈ c.mbounds → ∀ r n, (x, r, n) ∈ c.fixeds → load st1.mem (st1.reg r + off) 8 < b
   atLeast : ∀ x k, (x, k) ∈ c.atLeast → ∀ r, c.regOf x = some r → k ≤ st1.reg r
   preLines : ∀ k ts, (k, ts) ∈ c.preLines → 0 ≤ preLineVal c st1 k ts
   aligns : ∀ x al, (x, al) ∈ c.aligns → 0 < al → ∀ r, c.regOf x = some r → st1.reg r % al = 0
-  lineDisjoint : ∀ x y L, (x, y, L) ∈ c.lineDisjoint → 0 < L →
+  disjoint : ∀ x y L, (x, y, L) ∈ c.disjoint → 0 < L →
     ∀ bx lx by_ ly, c.bufSpan st1 x = some (bx, lx) → c.bufSpan st1 y = some (by_, ly) →
       ∀ i < lx, ∀ j < ly, (bx + i) / L ≠ (by_ + j) / L
 
@@ -1425,16 +1425,141 @@ theorem subSpanOf_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
     simp only [ev_sub, ev_add] at p1 p2
     exact ⟨bu, lu, hbu, by omega, by omega⟩
 
-theorem lineDisjointPairOk_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s : Sym}
+theorem inFrameSpan_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s : Sym}
     (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st)
+    (hspBound : ∀ sp, s.sp = some sp → -(ctx.contract.stackAt s0 : Int) ≤ sp)
+    {b l : Row} {vx nx : Nat}
+    (hb : (vx : Int) = ev ρ b) (hl : (nx : Int) = ev ρ l)
+    (h : inFrameSpan s b l = true) :
+    s0.reg RSP - ctx.contract.stackAt s0 ≤ vx ∧ vx + nx ≤ s0.reg RSP := by
+  unfold inFrameSpan at h
+  cases hsp : s.sp with
+  | none => simp [hsp] at h
+  | some sp =>
+    cases hcf : Lin.isConst (Lin.sub b (Lin.var RSP)) with
+    | none => simp [hsp, hcf] at h
+    | some cf =>
+      simp only [hsp, hcf, Bool.and_eq_true, decide_eq_true_eq] at h
+      obtain ⟨hspcf, hle⟩ := h
+      have hstack := hspBound sp hsp
+      have hcfEq := ev_isConst (ρ := ρ) hcf
+      simp only [ev_sub, ev_var] at hcfEq
+      have hrsp := H.entry RSP ctx.rsp_lt
+      have hpl := plain_sound hle ρ H.facts
+      simp only [ev_sub, ev_const] at hpl
+      have hfit := E.pre.2.2.1
+      omega
+
+theorem spanRowIn_apart_frame {c : Contract} {s0 : State} {ρ : Nat → Int} {name : String} {bR lR : Row} {bu lu : Nat}
+    (hreg : ∀ r l, (r, l) ∈ c.regions → s0.reg r + s0.reg l ≤ s0.reg RSP - c.stackAt s0 ∨ s0.reg RSP + c.slot ≤ s0.reg r)
+    (hout : ∀ x r n, (x, r, n) ∈ c.outs → s0.reg r + n ≤ s0.reg RSP - c.stackAt s0 ∨ s0.reg RSP + c.slot ≤ s0.reg r)
+    (hfix : ∀ x r n, (x, r, n) ∈ c.fixeds → s0.reg r + n ≤ s0.reg RSP - c.stackAt s0 ∨ s0.reg RSP + c.slot ≤ s0.reg r)
+    (he : ∀ r ∈ c.argRegs, (s0.reg r : Int) = ev ρ (Lin.var r)) :
+    ∀ (args : List (String × Kind)) (regs : List Nat),
+      (∀ r ∈ regs, r ∈ c.argRegs) →
+      (∀ r l, (r, l) ∈ regionsIn c args regs → (r, l) ∈ c.regions) →
+      (∀ x r n, (x, r, n) ∈ outsIn args regs → (x, r, n) ∈ c.outs) →
+      (∀ x r n, (x, r, n) ∈ fixedsIn args regs → (x, r, n) ∈ c.fixeds) →
+      spanRowIn c Lin.var name args regs = some (bR, lR) →
+      (bu : Int) = ev ρ bR → (lu : Int) = ev ρ lR →
+      bu + lu ≤ s0.reg RSP - c.stackAt s0 ∨ s0.reg RSP + c.slot ≤ bu
+  | [], _, _, _, _, _, h, _, _ => by simp [spanRowIn] at h
+  | _, [], _, _, _, _, h, _, _ => by simp [spanRowIn] at h
+  | (n, k) :: args, r :: regs, hrm, hrM, hoM, hfM, h, hbu, hlu => by
+    simp only [spanRowIn] at h
+    split at h
+    next _ =>
+      cases k with
+      | number | valArray _ _ _ => simp at h
+      | bytes len =>
+        cases hl : c.regOf len with
+        | none => simp [hl] at h
+        | some l =>
+          simp only [hl, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+          rcases h with ⟨rfl, rfl⟩
+          have e1 := he r (hrm r (by simp))
+          have e2 := he l (regOfIn_mem len c.args c.argRegs l hl)
+          have hdisj := hreg r l (hrM r l (by simp [regionsIn, hl]))
+          omega
+      | out cnt =>
+        simp only [Option.some.injEq, Prod.mk.injEq] at h
+        rcases h with ⟨rfl, rfl⟩
+        have e1 := he r (hrm r (by simp))
+        have hdisj := hout n r cnt (hoM n r cnt (by simp [outsIn]))
+        simp only [ev_const] at hlu
+        omega
+      | inout cnt =>
+        simp only [Option.some.injEq, Prod.mk.injEq] at h
+        rcases h with ⟨rfl, rfl⟩
+        have e1 := he r (hrm r (by simp))
+        have hdisj := hout n r cnt (hoM n r cnt (by simp [outsIn]))
+        simp only [ev_const] at hlu
+        omega
+      | fixed cnt =>
+        simp only [Option.some.injEq, Prod.mk.injEq] at h
+        rcases h with ⟨rfl, rfl⟩
+        have e1 := he r (hrm r (by simp))
+        have hdisj := hfix n r cnt (hfM n r cnt (by simp [fixedsIn]))
+        simp only [ev_const] at hlu
+        omega
+    next =>
+      apply spanRowIn_apart_frame hreg hout hfix he args regs
+      · intro r' m; exact hrm r' (List.mem_cons_of_mem _ m)
+      · intro r' l' m; apply hrM
+        cases k with
+        | bytes len => simp only [regionsIn]; cases hl : c.regOf len <;> simp [m]
+        | _ => simp [regionsIn, m]
+      · intro x' r' n' m; apply hoM; cases k <;> simp [outsIn, m]
+      · intro x' r' n' m; apply hfM; cases k <;> simp [fixedsIn, m]
+      · exact h
+      · exact hbu
+      · exact hlu
+
+theorem anyBufSubSpan_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s : Sym}
+    (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st)
+    {b l : Row} {vy ny : Nat}
+    (hb : (vy : Int) = ev ρ b) (hl : (ny : Int) = ev ρ l)
+    (h : anyBufSubSpan ctx s b l = true) :
+    vy + ny ≤ s0.reg RSP - ctx.contract.stackAt s0 ∨ s0.reg RSP + ctx.contract.slot ≤ vy := by
+  unfold anyBufSubSpan at h
+  simp only [List.any_eq_true] at h
+  obtain ⟨⟨nm, k⟩, _, hk⟩ := h
+  have hsub : subSpanOf ctx s b l nm = true := by
+    cases k <;> simp at hk <;> exact hk
+  unfold subSpanOf at hsub
+  cases hsr : spanRow ctx.contract Lin.var nm with
+  | none => simp [hsr] at hsub
+  | some bl =>
+    obtain ⟨buR, luR⟩ := bl
+    simp only [hsr, Bool.and_eq_true] at hsub
+    obtain ⟨h1, h2⟩ := hsub
+    have hreg0 : ∀ r ∈ ctx.contract.argRegs, (s0.reg r : Int) = ev ρ (Lin.var r) := by
+      intro r hr
+      rw [ev_var, H.entry r (argRegs_lt hr)]
+    obtain ⟨bu, lu, _, hbe, hle⟩ := spanRowIn_to_bufSpan hreg0 (fun _ m => m) hsr
+    have p1 := plain_sound h1 ρ H.facts
+    have p2 := plain_sound h2 ρ H.facts
+    simp only [ev_sub, ev_add] at p1 p2
+    have hapart := spanRowIn_apart_frame
+      (fun r l m => (E.pre.2.2.2.2.2.1 r l m).2)
+      (fun x r n m => (E.pre.2.2.2.2.2.2.1 x r n m).2.1)
+      (fun x r n m => (E.pre.2.2.2.2.2.2.2.2.1 x r n m).2.1)
+      hreg0 ctx.contract.args ctx.contract.argRegs
+      (fun _ m => m) (fun _ _ m => m) (fun _ _ _ m => m) (fun _ _ _ m => m)
+      hsr hbe hle
+    omega
+
+theorem disjointPairOk_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s : Sym}
+    (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st)
+    (hspBound : ∀ sp, s.sp = some sp → -(ctx.contract.stackAt s0 : Int) ≤ sp)
     {bx lx by_ ly : Row} {vx nx vy ny L : Nat} (hL : 0 < L)
     (hbx : (vx : Int) = ev ρ bx) (hlx : (nx : Int) = ev ρ lx)
     (hby : (vy : Int) = ev ρ by_) (hly : (ny : Int) = ev ρ ly)
-    (h : lineDisjointPairOk ctx s bx lx by_ ly L = true) :
+    (h : disjointPairOk ctx s bx lx by_ ly L = true) :
     ∀ i < nx, ∀ j < ny, (vx + i) / L ≠ (vy + j) / L := by
-  unfold lineDisjointPairOk at h
+  unfold disjointPairOk at h
   simp only [Bool.or_eq_true, Bool.and_eq_true, beq_iff_eq, List.any_eq_true, decide_eq_true_eq] at h
-  rcases h with (((h0 | h0) | ⟨hal, hle⟩) | ⟨hal, hle⟩) | ⟨⟨u, v, L'⟩, hm, ⟨hL', hdvd⟩, hsub⟩
+  rcases h with ((((h0 | h0) | ⟨hal, hle⟩) | ⟨hal, hle⟩) | ⟨hL1, hfr⟩) | ⟨⟨u, v, L'⟩, hm, ⟨hL', hdvd⟩, hsub⟩
   · have e := ev_isConst (ρ := ρ) h0; intro i hi; omega
   · have e := ev_isConst (ρ := ρ) h0; intro _ _ j hj; omega
   · have ⟨_, hmod⟩ := isAligned_sound E H hal
@@ -1448,11 +1573,19 @@ theorem lineDisjointPairOk_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ :
     have hmodN : vx % L = 0 := by rw [← hbx] at hmod; exact_mod_cast hmod
     intro i hi j hj
     exact Ne.symm (line_disjoint_of_aligned_hi hL (by omega) hmodN j hj i hi)
+  · subst hL1
+    rcases hfr with ⟨hinf, hany⟩ | ⟨hinf, hany⟩
+    · have ⟨hf1, hf2⟩ := inFrameSpan_sound E H hspBound hbx hlx hinf
+      have ha := anyBufSubSpan_sound E H hby hly hany
+      intro i hi j hj; simp only [Nat.div_one]; omega
+    · have ⟨hf1, hf2⟩ := inFrameSpan_sound E H hspBound hby hly hinf
+      have ha := anyBufSubSpan_sound E H hbx hlx hany
+      intro i hi j hj; simp only [Nat.div_one]; omega
   · rcases hsub with ⟨hsu, hsv⟩ | ⟨hsv, hsu⟩
     · obtain ⟨bu, lu, hbu, hbu1, hbu2⟩ := subSpanOf_sound H hbx hlx hsu
       obtain ⟨bv, lv, hbv, hbv1, hbv2⟩ := subSpanOf_sound H hby hly hsv
       intro i hi j hj
-      have hne := E.lineDisjoint hm hL' hbu hbv (vx - bu + i) (by omega) (vy - bv + j) (by omega)
+      have hne := E.disjoint hm hL' hbu hbv (vx - bu + i) (by omega) (vy - bv + j) (by omega)
       have e1 : bu + (vx - bu + i) = vx + i := by omega
       have e2 : bv + (vy - bv + j) = vy + j := by omega
       rw [e1, e2] at hne
@@ -1460,11 +1593,198 @@ theorem lineDisjointPairOk_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ :
     · obtain ⟨bv, lv, hbv, hbv1, hbv2⟩ := subSpanOf_sound H hbx hlx hsv
       obtain ⟨bu, lu, hbu, hbu1, hbu2⟩ := subSpanOf_sound H hby hly hsu
       intro i hi j hj
-      have hne := E.lineDisjoint hm hL' hbu hbv (vy - bu + j) (by omega) (vx - bv + i) (by omega)
+      have hne := E.disjoint hm hL' hbu hbv (vy - bu + j) (by omega) (vx - bv + i) (by omega)
       have e1 : bu + (vy - bu + j) = vy + j := by omega
       have e2 : bv + (vx - bv + i) = vx + i := by omega
       rw [e1, e2] at hne
       exact Ne.symm (div_ne_of_dvd hL hdvd hne)
+
+theorem valArrayAtIn_to_bufSpan {c : Contract} {reg : Nat → Nat} {name : String} {r l ch el : Nat} :
+    ∀ (args : List (String × Kind)) (regs : List Nat),
+      (∀ r' ∈ regs, r' ∈ c.argRegs) →
+      valArrayAtIn c name args regs = some (r, l, ch, el) →
+      bufSpanIn c reg name args regs = some (reg r, el * (reg l / ch)) ∧ r ∈ c.argRegs ∧ l ∈ c.argRegs
+  | [], _, _, h => by simp [valArrayAtIn] at h
+  | _, [], _, h => by simp [valArrayAtIn] at h
+  | (n, k) :: args, r0 :: regs, hrm, h => by
+    simp only [valArrayAtIn] at h
+    split at h
+    next hnm =>
+      cases k with
+      | valArray len ch0 el0 =>
+        cases hl : c.regOf len with
+        | none => simp [hl] at h
+        | some l0 =>
+          simp only [hl, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+          rcases h with ⟨rfl, rfl, rfl, rfl⟩
+          refine ⟨by simp [bufSpanIn, hnm, hl], hrm r0 (by simp), regOfIn_mem len c.args c.argRegs l0 hl⟩
+      | _ => simp at h
+    next hne =>
+      obtain ⟨hb, hr, hl⟩ := valArrayAtIn_to_bufSpan (reg := reg) args regs (fun r' m => hrm r' (List.mem_cons_of_mem _ m)) h
+      have hneF : (n == name) = false := by simp [hne]
+      exact ⟨by simp [bufSpanIn, hneF, hb], hr, hl⟩
+
+private theorem findValArray_mem {addr : Row} : ∀ (vas : List (String × Nat × Nat × Nat × Nat)) (start k : Nat)
+    {x : String} {r l ch el : Nat} {c : Int},
+    findValArray addr vas start = some (k, x, r, l, ch, el, c) →
+    (x, r, l, ch, el) ∈ vas ∧ Lin.isConst (Lin.sub addr (Lin.var r)) = some c ∧ 0 ≤ c
+  | [], _, _, _, _, _, _, _, _, h => by simp [findValArray] at h
+  | (x0, r0, l0, ch0, el0) :: more, start, k, x, r, l, ch, el, c, h => by
+    simp only [findValArray] at h
+    cases hc : Lin.isConst (Lin.sub addr (Lin.var r0)) with
+    | none =>
+      simp only [hc] at h
+      obtain ⟨h1, h2, h3⟩ := findValArray_mem more (start + 1) k h
+      exact ⟨List.mem_cons_of_mem _ h1, h2, h3⟩
+    | some c0 =>
+      simp only [hc] at h
+      split at h
+      next hok =>
+        injection h with h
+        rcases h with ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+        exact ⟨List.mem_cons_self .., hc, hok.1⟩
+      next =>
+        obtain ⟨h1, h2, h3⟩ := findValArray_mem more (start + 1) k h
+        exact ⟨List.mem_cons_of_mem _ h1, h2, h3⟩
+
+theorem valArraySpanDisjointOk_sound {ctx : Ctx} {p : Program} {s0 st st1 : State} {ρ : Nat → Int} {s : Sym} {c : Contract}
+    (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st)
+    (hspBound : ∀ sp, s.sp = some sp → -(ctx.contract.stackAt s0 : Int) ≤ sp)
+    (hreg : ∀ r ∈ c.argRegs, (st1.reg r : Int) = ev ρ (s.reg r))
+    {vaName : String} {by_ ly : Row} {vx nx vy ny L : Nat} (hL : 0 < L)
+    (hbx : c.bufSpan st1 vaName = some (vx, nx))
+    (hby : (vy : Int) = ev ρ by_) (hly : (ny : Int) = ev ρ ly)
+    (h : valArraySpanDisjointOk ctx s c vaName by_ ly L = true) :
+    ∀ i < nx, ∀ j < ny, (vx + i) / L ≠ (vy + j) / L := by
+  unfold valArraySpanDisjointOk at h
+  cases hva : valArrayAtIn c vaName c.args c.argRegs with
+  | none => simp [hva] at h
+  | some q =>
+    obtain ⟨rx, rl, ch, el⟩ := q
+    simp only [hva] at h
+    obtain ⟨hbuf, hrxM, hrlM⟩ := valArrayAtIn_to_bufSpan (reg := st1.reg) c.args c.argRegs (fun _ m => m) hva
+    rw [Contract.bufSpan, hbuf] at hbx
+    simp only [Option.some.injEq, Prod.mk.injEq] at hbx
+    rcases hbx with ⟨rfl, rfl⟩
+    have hrxEq := hreg rx hrxM
+    have hrlEq := hreg rl hrlM
+    by_cases hpos : (0 < ch && 0 < el) = true
+    · simp only [hpos, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hpos
+      obtain ⟨hch, hel⟩ := hpos
+      by_cases hly0 : (Lin.isConst ly == some 0) = true
+      · have e0 : Lin.isConst ly = some 0 := beq_iff_eq.mp hly0
+        have ec := ev_isConst (ρ := ρ) e0; intro _ _ j hj; omega
+      · simp only [hly0, Bool.false_eq_true, ↓reduceIte, Bool.or_eq_true] at h
+        rcases h with hslice | hframe
+        · cases hfv : findValArray (s.reg rx) ctx.contract.valArrays 0 with
+          | none => simp [hfv] at hslice
+          | some t =>
+            obtain ⟨k, x0, r0, l0, ch0, el0, d⟩ := t
+            simp only [hfv, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq, decide_eq_true_eq, List.any_eq_true] at hslice
+            obtain ⟨⟨⟨⟨⟨⟨hva0, hcheq⟩, heleq⟩, hd0⟩, hdmod⟩, hlen⟩, hdisj⟩ := hslice
+            subst hcheq; subst heleq
+            obtain ⟨hmem, hdiff, _⟩ := findValArray_mem ctx.contract.valArrays 0 k hfv
+            obtain ⟨hbuf0, hr0M, hl0M⟩ := valArrayAtIn_to_bufSpan (reg := s0.reg) ctx.contract.args ctx.contract.argRegs (fun _ m => m) hva0
+            have hdiffEq := ev_isConst (ρ := ρ) hdiff
+            simp only [ev_sub, ev_var] at hdiffEq
+            have hr0Eq := H.entry r0 (argRegs_lt hr0M)
+            have hl0Eq := H.entry l0 (argRegs_lt hl0M)
+            have hlenP := plain_sound hlen ρ H.facts
+            simp only [ev_sub, ev_add, ev_var, ev_const] at hlenP
+            have hdMul : el * (d.toNat / el) = d.toNat := by
+              have hmodI : ((d.toNat : Int) % (el : Int)) = 0 := by rw [Int.toNat_of_nonneg hd0]; exact hdmod
+              have hmodN : d.toNat % el = 0 := by exact_mod_cast hmodI
+              have := Nat.div_add_mod d.toNat el
+              omega
+            have hsumDiv : d.toNat / el + st1.reg rl / ch ≤ s0.reg l0 / ch := by
+              have h1 : (d.toNat / el + st1.reg rl / ch) * ch ≤ s0.reg l0 := by
+                have h2 : (st1.reg rl / ch) * ch ≤ st1.reg rl := Nat.div_mul_le_self _ _
+                have hcast : (((d.toNat / el) * ch : Nat) : Int) = ((d.toNat : Int) / (el : Int)) * (ch : Int) := by
+                  rw [Int.natCast_mul, Int.natCast_ediv]
+                have h3 : (d.toNat / el) * ch + st1.reg rl ≤ s0.reg l0 := by omega
+                rw [Nat.add_mul]; omega
+              exact (Nat.le_div_iff_mul_le hch).mpr h1
+            have hsubHi : d.toNat + el * (st1.reg rl / ch) ≤ el * (s0.reg l0 / ch) := by
+              have := Nat.mul_le_mul_left el hsumDiv
+              rw [Nat.mul_add, hdMul] at this
+              exact this
+            have hrxVal : st1.reg rx = s0.reg r0 + d.toNat := by omega
+            rcases hdisj with ⟨hL1, hinf⟩ | ⟨⟨u, v, L'⟩, hm, ⟨hL', hdvd⟩, hpair⟩
+            · subst hL1
+              have ⟨hf1, hf2⟩ := inFrameSpan_sound E H hspBound hby hly hinf
+              have hvaF := (E.valArray hmem).2.1
+              intro i hi j hj; simp only [Nat.div_one]; omega
+            · rcases hpair with ⟨rfl, hsubv⟩ | ⟨rfl, hsubu⟩
+              · obtain ⟨bv, lv, hbv, hbv1, hbv2⟩ := subSpanOf_sound H hby hly hsubv
+                intro i hi j hj
+                have hne := E.disjoint hm hL' hbuf0 hbv (d.toNat + i) (by omega) (vy - bv + j) (by omega)
+                have e1 : s0.reg r0 + (d.toNat + i) = st1.reg rx + i := by omega
+                have e2 : bv + (vy - bv + j) = vy + j := by omega
+                rw [e1, e2] at hne
+                exact div_ne_of_dvd hL hdvd hne
+              · obtain ⟨bu, lu, hbu, hbu1, hbu2⟩ := subSpanOf_sound H hby hly hsubu
+                intro i hi j hj
+                have hne := E.disjoint hm hL' hbu hbuf0 (vy - bu + j) (by omega) (d.toNat + i) (by omega)
+                have e1 : bu + (vy - bu + j) = vy + j := by omega
+                have e2 : s0.reg r0 + (d.toNat + i) = st1.reg rx + i := by omega
+                rw [e1, e2] at hne
+                exact Ne.symm (div_ne_of_dvd hL hdvd hne)
+        · by_cases hL1 : L = 1
+          · subst hL1
+            simp only [bne_self_eq_false, Bool.false_eq_true, ↓reduceIte] at hframe
+            cases hsp : s.sp with
+            | none => simp [hsp] at hframe
+            | some sp =>
+              cases hcf : frameAt s rx with
+              | none => simp [hsp, hcf] at hframe
+              | some cf =>
+                simp only [hsp, hcf, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at hframe
+                obtain ⟨⟨hspcf, hcf0⟩, hcases⟩ := hframe
+                have hstack := hspBound sp hsp
+                have hcfEq := ev_isConst (ρ := ρ) hcf
+                simp only [ev_sub, ev_var] at hcfEq
+                have hrsp := H.entry RSP ctx.rsp_lt
+                have hfit := E.pre.2.2.1
+                rcases hcases with ⟨hfits, hany⟩ | hslot
+                · have hpl := plain_sound hfits ρ H.facts
+                  simp only [ev_sub, ev_const] at hpl
+                  have hdiv : st1.reg rl / ch ≤ (-cf).toNat / el := by
+                    have hlt : st1.reg rl < ((-cf).toNat / el + 1) * ch := by
+                      have hcast : ((((-cf).toNat / el + 1 : Nat) * ch : Nat) : Int) =
+                          ((((-cf).toNat / el : Nat) : Int) + 1) * (ch : Int) := by push_cast; rfl
+                      omega
+                    have := Nat.div_lt_of_lt_mul (by rw [Nat.mul_comm]; exact hlt)
+                    omega
+                  have hmul : el * (st1.reg rl / ch) ≤ (-cf).toNat :=
+                    Nat.le_trans (Nat.mul_le_mul_left el hdiv) (Nat.mul_div_le _ _)
+                  have ha := anyBufSubSpan_sound E H hby hly hany
+                  intro i hi j hj; simp only [Nat.div_one]; omega
+                · cases hcf2 : Lin.isConst (Lin.sub by_ (Lin.var RSP)) with
+                  | none => simp [hcf2] at hslot
+                  | some cf2 =>
+                    simp only [hcf2, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at hslot
+                    have hcf2Eq := ev_isConst (ρ := ρ) hcf2
+                    simp only [ev_sub, ev_var] at hcf2Eq
+                    rcases hslot with ⟨⟨_, _⟩, hbelow⟩ | ⟨⟨hcfle, _⟩, habove⟩
+                    · have hpl := plain_sound hbelow ρ H.facts
+                      simp only [ev_sub, ev_const] at hpl
+                      intro i hi j hj; simp only [Nat.div_one]; omega
+                    · have hpl := plain_sound habove ρ H.facts
+                      simp only [ev_sub, ev_const] at hpl
+                      have hdiv : st1.reg rl / ch ≤ (cf2 - cf).toNat / el := by
+                        have hlt : st1.reg rl < ((cf2 - cf).toNat / el + 1) * ch := by
+                          have hcast : ((((cf2 - cf).toNat / el + 1 : Nat) * ch : Nat) : Int) =
+                              ((((cf2 - cf).toNat / el : Nat) : Int) + 1) * (ch : Int) := by push_cast; rfl
+                          omega
+                        have := Nat.div_lt_of_lt_mul (by rw [Nat.mul_comm]; exact hlt)
+                        omega
+                      have hmul : el * (st1.reg rl / ch) ≤ (cf2 - cf).toNat :=
+                        Nat.le_trans (Nat.mul_le_mul_left el hdiv) (Nat.mul_div_le _ _)
+                      intro i hi j hj; simp only [Nat.div_one]; omega
+          · have hne1 : (L != 1) = true := by simp [hL1]
+            simp [hne1] at hframe
+    · simp [hpos] at h
 
 theorem callAlignsOk_sound_of {ctx : Ctx} {p : Program} {s0 st st1 : State} {ρ : Nat → Int} {s : Sym} {c : Contract}
     (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st)
@@ -1495,19 +1815,28 @@ theorem callAlignsOk_sound_of {ctx : Ctx} {p : Program} {s0 st st1 : State} {ρ 
       next => exact (refuse_ok e1).elim
     | tail _ mt => exact callAlignsOk_sound_of E H hreg more e2 x al mt hpos r hr
 
-theorem callLineDisjointOk_sound_of {ctx : Ctx} {p : Program} {s0 st st1 : State} {ρ : Nat → Int} {s : Sym} {c : Contract}
+theorem callDisjointOk_sound_of {ctx : Ctx} {p : Program} {s0 st st1 : State} {ρ : Nat → Int} {s : Sym} {c : Contract}
     (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st)
+    (hspBound : ∀ sp, s.sp = some sp → -(ctx.contract.stackAt s0 : Int) ≤ sp)
     (hreg : ∀ r ∈ c.argRegs, (st1.reg r : Int) = ev ρ (s.reg r)) :
     ∀ (lds : List (String × String × Nat)) {items rest : Items},
       each (fun (x, y, L) =>
         if L == 0 then pure ()
         else match spanRow c s.reg x, spanRow c s.reg y with
         | some (bx, lx), some (by_, ly) =>
-          if lineDisjointPairOk ctx s bx lx by_ ly L then pure ()
-          else refuse s!"arguments `{x}` and `{y}` are not shown to be {L}-byte cache-line disjoint"
-        | _, _ =>
+          if disjointPairOk ctx s bx lx by_ ly L then pure ()
+          else refuse s!"arguments `{x}` and `{y}` are not shown to be {L}-byte disjoint"
+        | none, some (by_, ly) =>
           if (c.regOf x).isNone || (c.regOf y).isNone then pure ()
-          else refuse s!"arguments `{x}` and `{y}` have extents not handled for {L}-byte cache-line disjointness") lds items = .ok ((), rest) →
+          else if valArraySpanDisjointOk ctx s c x by_ ly L then pure ()
+          else refuse s!"arguments `{x}` and `{y}` are not shown to be {L}-byte disjoint"
+        | some (bx, lx), none =>
+          if (c.regOf x).isNone || (c.regOf y).isNone then pure ()
+          else if valArraySpanDisjointOk ctx s c y bx lx L then pure ()
+          else refuse s!"arguments `{x}` and `{y}` are not shown to be {L}-byte disjoint"
+        | none, none =>
+          if (c.regOf x).isNone || (c.regOf y).isNone then pure ()
+          else refuse s!"arguments `{x}` and `{y}` have extents not handled for {L}-byte disjointness") lds items = .ok ((), rest) →
       ∀ x y L, (x, y, L) ∈ lds → 0 < L →
         ∀ bx lx by_ ly, c.bufSpan st1 x = some (bx, lx) → c.bufSpan st1 y = some (by_, ly) →
           ∀ i < lx, ∀ j < ly, (bx + i) / L ≠ (by_ + j) / L
@@ -1525,14 +1854,29 @@ theorem callLineDisjointOk_sound_of {ctx : Ctx} {p : Program} {s0 st st1 : State
       have hry' : c.regOf y0 = some ry := hry
       cases hsx : spanRow c s.reg x0 with
       | none =>
-        simp only [hsx, hrx', hry', Option.isNone_some, Bool.or_self, Bool.false_eq_true, ↓reduceIte] at e1
-        exact (refuse_ok e1).elim
+        cases hsy : spanRow c s.reg y0 with
+        | none =>
+          simp only [hsx, hsy, hrx', hry', Option.isNone_some, Bool.or_self, Bool.false_eq_true, ↓reduceIte] at e1
+          exact (refuse_ok e1).elim
+        | some p2 =>
+          obtain ⟨byR, lyR⟩ := p2
+          simp only [hsx, hsy, hrx', hry', Option.isNone_some, Bool.or_self, Bool.false_eq_true, ↓reduceIte] at e1
+          split at e1
+          next hok =>
+            obtain ⟨ey1, ey2⟩ := spanRowIn_sound hreg (fun _ m => m) hsy hby
+            exact valArraySpanDisjointOk_sound E H hspBound hreg hL hbx ey1 ey2 hok
+          next => exact (refuse_ok e1).elim
       | some p1 =>
         obtain ⟨bxR, lxR⟩ := p1
         cases hsy : spanRow c s.reg y0 with
         | none =>
           simp only [hsx, hsy, hrx', hry', Option.isNone_some, Bool.or_self, Bool.false_eq_true, ↓reduceIte] at e1
-          exact (refuse_ok e1).elim
+          split at e1
+          next hok =>
+            obtain ⟨ex1, ex2⟩ := spanRowIn_sound hreg (fun _ m => m) hsx hbx
+            intro i hi j hj
+            exact Ne.symm (valArraySpanDisjointOk_sound E H hspBound hreg hL hby ex1 ex2 hok j hj i hi)
+          next => exact (refuse_ok e1).elim
         | some p2 =>
           obtain ⟨byR, lyR⟩ := p2
           simp only [hsx, hsy] at e1
@@ -1540,13 +1884,14 @@ theorem callLineDisjointOk_sound_of {ctx : Ctx} {p : Program} {s0 st st1 : State
           next hok =>
             obtain ⟨ex1, ex2⟩ := spanRowIn_sound hreg (fun _ m => m) hsx hbx
             obtain ⟨ey1, ey2⟩ := spanRowIn_sound hreg (fun _ m => m) hsy hby
-            exact lineDisjointPairOk_sound E H hL ex1 ex2 ey1 ey2 hok
+            exact disjointPairOk_sound E H hspBound hL ex1 ex2 ey1 ey2 hok
           next => exact (refuse_ok e1).elim
-    | tail _ mt => exact callLineDisjointOk_sound_of E H hreg more e2 x y L mt hL bx lx by_ ly hbx hby
+    | tail _ mt => exact callDisjointOk_sound_of E H hspBound hreg more e2 x y L mt hL bx lx by_ ly hbx hby
 
 theorem callPreOk_sound {ctx : Ctx} {p q : Program} {s0 st : State} {ρ : Nat → Int} {s : Sym} {name : String} {c : Contract}
-    {i : Instr} (E : Setting ctx p s0) (F : Fits ctx st i c) (H : Holds ctx s0 ρ s st) {items rest : Items}
-    (h : callPreOk ctx s name c items = .ok ((), rest)) :
+    {i : Instr} (E : Setting ctx p s0) (F : Fits ctx st i c) (H : Holds ctx s0 ρ s st) {items rest items_dj rest_dj : Items}
+    (h : callPreOk ctx s name c items = .ok ((), rest))
+    (hdj : callDisjointOk ctx s c items_dj = .ok ((), rest_dj)) :
     CallExtra ctx s0 st c (afterCall p q i st) ∧
     (ctx.selfName = some name → ∀ d r, c.decreases = some d → c.regOf d = some r → (afterCall p q i st).reg r < s0.reg r) := by
   unfold callPreOk at h
@@ -1562,7 +1907,6 @@ theorem callPreOk_sound {ctx : Ctx} {p q : Program} {s0 st : State} {ρ : Nat �
     obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
     obtain ⟨_, r2, e2, h⟩ := V.bind_ok h
     obtain ⟨_, r3, e3, h⟩ := V.bind_ok h
-    obtain ⟨_, r4, e4, h⟩ := V.bind_ok h
     have hg := stackFitsM_sound F p q H e0
     have esp := ev_isConst (ρ := ρ) hsp
     simp only [ev_sub, ev_var] at esp
@@ -1578,7 +1922,9 @@ theorem callPreOk_sound {ctx : Ctx} {p q : Program} {s0 st : State} {ρ : Nat �
       rw [afterCall_reg F.link rne]
       exact H.reg r r16
     have hal := callAlignsOk_sound_of E H hreg c.aligns e3
-    have hld := callLineDisjointOk_sound_of E H hreg c.lineDisjoint e4
+    have hspBound : ∀ sp', s.sp = some sp' → -(ctx.contract.stackAt s0 : Int) ≤ sp' := by
+      intro sp' h'; rw [hsp] at h'; cases h'; omega
+    have hld := callDisjointOk_sound_of E H hspBound hreg c.disjoint hdj
     refine ⟨⟨hst, hmb, each_atLeast_sound F p q H c.atLeast e1, each_preLines_sound F p q H c.preLines e2, hal, hld⟩, ?_⟩
     intro hself d r hdec hr
     have hbeq : (ctx.selfName == some name) = true := by simp [hself]
@@ -1756,7 +2102,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
             (fun x r n m => by rw [hfx] at m; cases m),
             hbd, (fun x off b m r n mf => by rw [hfx] at mf; cases mf),
             (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), hex.atLeast,
-            afterCall_aligned F p q, hex.preLines, (fun x r l ch el m => by rw [hva] at m; cases m), hex.aligns, hex.lineDisjoint⟩
+            afterCall_aligned F p q, hex.preLines, (fun x r l ch el m => by rw [hva] at m; cases m), hex.aligns, hex.disjoint⟩
           · exact afterCall_small F.link H.small
           · rw [s1rsp]; omega
           · rw [s1rsp]; omega

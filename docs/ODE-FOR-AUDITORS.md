@@ -176,7 +176,7 @@ Ode contracts support an optional `trace depends on` clause governing which inpu
   addresses. For example, our 20-round RFC 8439 ChaCha20 block contract omits `trace depends on`:
   ```ocl
   contract (a0: 64 bytes, a1: 64 bytes) {
-      requires no_overlap(a0, a1)
+      requires disjoint(a0, a1, 1)
       ensures a0 = bytes_of(f0(words(a1)))
       stack 0
   }

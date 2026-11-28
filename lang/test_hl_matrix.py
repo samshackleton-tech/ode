@@ -144,7 +144,7 @@ class TestHighLevelMatrix(unittest.TestCase):
                 needs_line = f"    {extra_needs}\n" if (extra_needs and arch == "x86_64") else ""
                 src = (
                     f"fn test_intr(out: {sz} bytes, src: {sz} bytes, k: u64)\n"
-                    f"    requires no_overlap(out, src)\n"
+                    f"    requires disjoint(out, src, 1)\n"
                     f"    ensures out = out\n"
                     f"{needs_line}"
                     f"    trace depends on nothing\n"
@@ -199,7 +199,7 @@ def vec_test(ws) {
 }
 
 fn vec_ops(out: 16 bytes, src: 32 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = bytes_of(vec_test(words(src)))
     trace depends on nothing
 {
@@ -220,7 +220,7 @@ fn vec_ops(out: 16 bytes, src: 32 bytes)
         src_shuf = """\
 def rot1(ws) { [ws[1], ws[2], ws[3], ws[0]] }
 fn shuf_only_x86(out: 16 bytes, src: 16 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = bytes_of(rot1(words(src)))
     trace depends on nothing
 {
@@ -257,7 +257,7 @@ fn load_u64_unaligned(buf: n bytes, n: number) -> u64
 def copy_off4(ws) { [ws[1], ws[2], ws[3], ws[4]] }
 
 fn load_v_off4(out: 16 bytes, src: 32 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = bytes_of(copy_off4(words(src)))
     trace depends on nothing
 {
@@ -582,7 +582,7 @@ fn sum4_unroll_join(pkt: n bytes, n: number) -> u64
         for op_name, expr, arches in vec_probes:
             src = (
                 "fn p(out: 64 bytes, inp: 64 bytes, w0: word, w1: word)\n"
-                "    requires no_overlap(out, inp)\n"
+                "    requires disjoint(out, inp, 1)\n"
                 "    trace depends on nothing\n"
                 "{\n"
                 "    let x: u32x4 := inp.u32x4(0)\n"
@@ -607,7 +607,7 @@ fn sum4_unroll_join(pkt: n bytes, n: number) -> u64
         for imm in (0x00, 0x06, 0x39, 0x4E, 0x55, 0x93, 0xAA, 0xE4, 0xFF):
             src_s = (
                 "fn s(out: 16 bytes, inp: 16 bytes)\n"
-                "    requires no_overlap(out, inp)\n"
+                "    requires disjoint(out, inp, 1)\n"
                 "    trace depends on nothing\n"
                 f"{{\n    let x: u32x4 := inp.u32x4(0)\n    out.u32x4(0) := shuf32(x, {imm})\n}}\n"
             )
@@ -680,7 +680,7 @@ def vsum(a, b) {
 }
 
 fn sp_vec_add(out: 16 bytes, a: 16 bytes, b: 16 bytes)
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     ensures out = bytes_of(vsum(words(a), words(b)))
     stack 64
 {
@@ -877,7 +877,7 @@ fn helper(c: u8)
 }
 
 fn blowup(out: 64 bytes, src: n bytes, n: number)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     requires n >= 256
     requires n <= 256
     ensures out = [step_v(src[4 * i]) for i in 0..64]
@@ -1060,7 +1060,7 @@ def mix_u64(m, t) {
 }
 
 fn run_mix(out: 16 bytes, m: 16 bytes, t: counter)
-    requires no_overlap(out, m)
+    requires disjoint(out, m, 1)
     ensures out = bytes_of(mix_u64(words(m), t))
     stack 64
 {
@@ -1170,7 +1170,7 @@ def mask_hi(m) {
 }
 
 fn f_mask(out: 16 bytes, m: 16 bytes)
-    requires no_overlap(out, m)
+    requires disjoint(out, m, 1)
     ensures out = bytes_of(mask_hi(words(m)))
     stack 64
 {
@@ -1303,7 +1303,7 @@ fn f_buf_rt(x: number, y: number)
         for bad_call in ("let y: u32x16 := shuf32(z, 57)", "let y := shuf32(z, 57)", "let y: u32x16 := blend32(z, z, 1)"):
             src_zmm_bad = f"""\
 fn f_zmm(out: 64 bytes, src: 64 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = src
     stack 64
 {{
@@ -1607,7 +1607,7 @@ inline fn my_rotl32(v: u32x4, const k: u64) -> u32x4 {
 }
 
 fn f_rot_vec(src: 16 bytes, out: 16 bytes)
-    requires no_overlap(src, out)
+    requires disjoint(src, out, 1)
     ensures out = bytes_of(rot_block(words(src)))
     trace depends on nothing
     stack 0
@@ -1662,7 +1662,7 @@ inline fn lower_ascii(c: u8) -> u64
 }
 
 fn f_map_buf(src: n bytes, out: 64 bytes, n: number)
-    requires no_overlap(src, out)
+    requires disjoint(src, out, 1)
     requires n >= 64
     requires n <= 64
     ensures out = map_all(src)
@@ -1852,7 +1852,7 @@ def sum17(a, b) {
 }
 
 fn f_mixed_zmm_xmm(out: 64 bytes, out4: 16 bytes, a: 64 bytes, b: 64 bytes)
-    requires no_overlap(out, out4, a, b)
+    requires disjoint(out, out4, a, b, 1)
     ensures out = bytes_of(sum17(words(a), words(b)))
     ensures out4 = bytes_of([words(a)[0] ^ words(b)[0], words(a)[1] ^ words(b)[1], words(a)[2] ^ words(b)[2], words(a)[3] ^ words(b)[3]])
     trace depends on nothing
@@ -1897,7 +1897,7 @@ for x86_64 needs avx needs avx512 {
         # 2. Deeply nested balanced vector tree refuses cleanly instead of clobbering scratch
         src_deep_vec = """\
 fn f_deep(out: 16 bytes, a: 16 bytes, b: 16 bytes)
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     ensures out = out
     trace depends on nothing
 {
@@ -2033,7 +2033,7 @@ def sum_pairs(ws) {
 }
 
 fn f_fixed_u32(out: 16 bytes, a: 16 bytes)
-    requires no_overlap(out, a)
+    requires disjoint(out, a, 1)
     ensures out = bytes_of(sum_pairs(words(a)))
     trace depends on nothing
 {
@@ -2086,7 +2086,7 @@ fn f_inout_rw(h: 16 bytes)
 def copy4(ws) { [ws[0], ws[1], ws[2], ws[3]] }
 
 fn f_framew_scalar(out: 16 bytes, src: 16 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = bytes_of(copy4(words(src)))
     trace depends on nothing
 {
@@ -2108,7 +2108,7 @@ fn f_framew_scalar(out: 16 bytes, src: 16 bytes)
 def rev4(ws) { [ws[3], ws[2], ws[1], ws[0]] }
 
 fn f_store4(out: 16 bytes, src: 16 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = bytes_of(rev4(words(src)))
     trace depends on nothing
 {
@@ -2128,7 +2128,7 @@ fn f_store4(out: 16 bytes, src: 16 bytes)
         # 5. Pure write-only `out` buffer (`arg out out N`) STILL refused on `.u32`/`.u64` read
         src_wo_read = """\
 fn f_wo_read(out: 16 bytes, src: 16 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = src
     trace depends on nothing
 {
@@ -2153,7 +2153,7 @@ fn f_wo_read(out: 16 bytes, src: 16 bytes)
 def id4(ws) { [ws[0], ws[1], ws[2], ws[3]] }
 
 fn f_stlf(out: 16 bytes, src: 16 bytes)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     ensures out = bytes_of(id4(words(src)))
     trace depends on nothing
 {
@@ -2199,12 +2199,12 @@ fn f_stlf(out: 16 bytes, src: 16 bytes)
         import ode_canon
         import advice.estimate as est
 
-        # 1. `requires aligned(...)` + `requires line_disjoint(...)` canonicalization & dual verification
+        # 1. `requires aligned(...)` + `requires disjoint(...)` canonicalization & dual verification
         src_align_call = """\
 fn leaf_sum(a: n bytes, b: n bytes, n: u64) -> u64
     requires n >= 1, n <= 64
     requires aligned(a, 64)
-    requires line_disjoint(a, b, 64)
+    requires disjoint(a, b, 64)
     returns a[0] + b[0]
     trace depends on n
 {
@@ -2216,7 +2216,7 @@ fn leaf_sum(a: n bytes, b: n bytes, n: u64) -> u64
 fn caller_ok(p: n bytes, q: n bytes, n: u64) -> u64
     requires n >= 1, n <= 64
     requires aligned(p, 128)
-    requires line_disjoint(p, q, 128)
+    requires disjoint(p, q, 128)
     returns p[0] + q[0]
     trace depends on n
 {
@@ -2226,7 +2226,7 @@ fn caller_ok(p: n bytes, q: n bytes, n: u64) -> u64
         for arch in ("x86_64", "arm64"):
             res = _pack_and_dual_verify(src_align_call, "caller_ok", arch, check_v2=True)
             self.assertIn("requires aligned(a0, 128)", res["canonical_ocl"])
-            self.assertIn("requires line_disjoint(a0, a1, 128)", res["canonical_ocl"])
+            self.assertIn("requires disjoint(a0, a1, 128)", res["canonical_ocl"])
 
         # Negative control 1a: caller only guarantees 16-byte alignment, callee asks 64-byte -> REFUSED
         src_align_bad = src_align_call.replace("requires aligned(p, 128)", "requires aligned(p, 16)")
@@ -2241,8 +2241,8 @@ fn caller_ok(p: n bytes, q: n bytes, n: u64) -> u64
                     )
                 self.assertIn("64-byte aligned", str(ctx.exception))
 
-        # Negative control 1b: caller omits `line_disjoint`, callee asks `line_disjoint(a, b, 64)` -> REFUSED
-        src_ld_bad = src_align_call.replace("requires line_disjoint(p, q, 128)\n", "")
+        # Negative control 1b: caller omits `disjoint`, callee asks `disjoint(a, b, 64)` -> REFUSED
+        src_ld_bad = src_align_call.replace("requires disjoint(p, q, 128)\n", "")
         for arch in ("x86_64", "arm64"):
             with tempfile.TemporaryDirectory(prefix="ode_ldbad_") as td:
                 sp = Path(td) / "ldbad.ode"
@@ -2252,7 +2252,67 @@ fn caller_ok(p: n bytes, q: n bytes, n: u64) -> u64
                         str(sp), None, str(Path(td) / "o.o"), str(Path(td) / "o.proof"),
                         fn_name="caller_ok", target=arch, c_abi=True, stores=STD_STORES,
                     )
-                self.assertIn("64-byte cache-line disjoint", str(ctx.exception))
+                self.assertIn("64-byte disjoint", str(ctx.exception))
+
+        # 1c. VM-page granule disjointness (`16384 -> 4096 -> 128 -> 64 -> 1`) + numeric `aligned(off, 4096)`!
+        src_page_ok = """\
+def page_head_sum(a, b) {
+    a[0] + b[0]
+}
+
+fn page_callee(a: n bytes, b: n bytes, n: u64, off: u64) -> u64
+    requires n >= 1, n <= 32768, off < n
+    requires aligned(a, 4096)
+    requires aligned(b, 4096)
+    requires aligned(off, 4096)
+    requires disjoint(a, b, 4096)
+    returns page_head_sum(a, b)
+    trace depends on n, off
+{
+    let check_a: u64 := (a + off) & 4095
+    let check_b: u64 := b & 4095
+    let x: u64 := a[0]
+    let y: u64 := b[0]
+    return x + y + check_a + check_b
+}
+
+fn page_caller(p: m bytes, q: m bytes, m: u64, stride: u64) -> u64
+    requires m >= 1, m <= 32768, stride < m
+    requires aligned(p, 16384)
+    requires aligned(q, 16384)
+    requires aligned(stride, 16384)
+    requires disjoint(p, q, 16384)
+    returns page_head_sum(p, q)
+    trace depends on m, stride
+{
+    return page_callee(p, q, m, stride)
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory(prefix="ode_page_") as td:
+                sp = Path(td) / "page.ode"
+                sp.write_text(src_page_ok, encoding="utf-8")
+                res = ode_audit.pack_verified(
+                    str(sp), None, str(Path(td) / "p.o"), str(Path(td) / "p.proof"),
+                    fn_name="page_caller", target=arch, c_abi=True, stores=STD_STORES,
+                    verifier="both",
+                )
+                self.assertEqual(res["verdict"], "shown", f"{arch}: {res}")
+                self.assertIn("requires aligned(a0, 16384)", res["canonical_ocl"])
+                self.assertIn("requires aligned(a3, 16384)", res["canonical_ocl"])
+                self.assertIn("requires disjoint(a0, a1, 16384)", res["canonical_ocl"])
+
+        # Negative control 1d: caller gives 64-byte disjointness, callee demands 4096-byte page disjointness -> REFUSED
+        src_page_bad = src_page_ok.replace("requires disjoint(p, q, 16384)", "requires disjoint(p, q, 64)")
+        with tempfile.TemporaryDirectory(prefix="ode_page_bad_") as td:
+            sp = Path(td) / "page_bad.ode"
+            sp.write_text(src_page_bad, encoding="utf-8")
+            with self.assertRaises(ode_audit.PackProofError) as ctx_pb:
+                ode_audit.pack_verified(
+                    str(sp), None, str(Path(td) / "pb.o"), str(Path(td) / "pb.proof"),
+                    fn_name="page_caller", target="x86_64", c_abi=True, stores=STD_STORES,
+                )
+            self.assertIn("4096-byte disjoint", str(ctx_pb.exception))
 
         # 2. Machine-level arena sub-slice partitioning + alignment bitmask checks in BOTH Lean 4 AND verify2.py
         import lean_verify, verify2
@@ -2294,10 +2354,10 @@ def sum_ab(h, a, b) {
 }
 
 fn worker(out: 16 bytes, a: 64 bytes, b: 64 bytes)
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     requires aligned(a, 64)
     requires aligned(b, 64)
-    requires line_disjoint(a, b, 64)
+    requires disjoint(a, b, 64)
     ensures out = bytes_of(sum_ab(words(out), words(a[0 .. 16]), words(b[0 .. 16])))
     trace depends on nothing
 {
@@ -2308,7 +2368,7 @@ fn worker(out: 16 bytes, a: 64 bytes, b: 64 bytes)
 }
 
 fn split_ok(out: 16 bytes, arena: 128 bytes)
-    requires no_overlap(out, arena)
+    requires disjoint(out, arena, 1)
     requires aligned(arena, 64)
     ensures out = bytes_of(sum_ab(words(out), words(arena[0 .. 16]), words(arena[64 .. 80])))
     stack 16
@@ -2343,9 +2403,9 @@ def sum_ab(h, a, b) {
 }
 
 fn worker(out: 16 bytes, a: 32 bytes, b: 32 bytes)
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     requires aligned(a, 64)
-    requires line_disjoint(a, b, 64)
+    requires disjoint(a, b, 64)
     ensures out = bytes_of(sum_ab(words(out), words(a[0 .. 16]), words(b[0 .. 16])))
     trace depends on nothing
 {
@@ -2356,7 +2416,7 @@ fn worker(out: 16 bytes, a: 32 bytes, b: 32 bytes)
 }
 
 fn split_fs(out: 16 bytes, arena: 128 bytes)
-    requires no_overlap(out, arena)
+    requires disjoint(out, arena, 1)
     requires aligned(arena, 64)
     ensures out = bytes_of(sum_ab(words(out), words(arena[0 .. 16]), words(arena[32 .. 48])))
     stack 16
@@ -2389,7 +2449,7 @@ for arm64 {
                         str(sp_fs), None, str(td / f"fs_{arch}.o"), str(td / f"fs_{arch}.proof"),
                         fn_name="split_fs", target=arch, c_abi=True, stores=STD_STORES,
                     )
-                self.assertIn("64-byte cache-line disjoint", str(ctx_fs.exception))
+                self.assertIn("64-byte disjoint", str(ctx_fs.exception))
 
             # 2d. Also verify `verify2.py` independently refuses false sharing at +32 on raw statement/proof!
             stmt_fs_raw = """\
@@ -2397,7 +2457,7 @@ fn worker
 arg a fixed 32
 arg b fixed 32
 align a 64
-linedisjoint a b 64
+disjoint a b 64
 returns (num 0)
 stack 0
 i 0 4 .mov 64 (.reg .rax) (.imm 0)
@@ -2418,7 +2478,7 @@ i 13 14 .ret
             Path(pf_fs).write_text("for worker\nfor split_fs\n", encoding="utf-8")
             with self.assertRaises(verify2.Refuse) as ctx_v2:
                 verify2.verify_files(tab_x86, st_fs, pf_fs)
-            self.assertIn("64-byte cache-line disjoint", str(ctx_v2.exception))
+            self.assertIn("64-byte disjoint", str(ctx_v2.exception))
         finally:
             stmt_dir.cleanup()
 

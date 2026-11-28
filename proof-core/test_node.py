@@ -33,7 +33,7 @@ NODE, AVX512, SSE41 = "b3l_node_out", "blake3_servil_compress_in_place_avx512", 
 FUNCTIONS = [(OBJ, NODE), (OBJ, AVX512), (OBJ, SSE41)]
 CONTRACT = ["arg out inout 32", "arg nd fixed 120", "arg root number", "arg plat number",
             "mbelow nd 104 65", "mbelow nd 112 256", "below root 256", "needs sse41", "needsif avx512 plat 5",
-            "hidden nd", "hidden root",
+            "disjoint out nd 1", "hidden nd", "hidden root",
             "ensuresw out (call bytes_of (call node_value (record (h (call words (slice (name nd) (num 0) (num 32)))) "
             "(block (slice (name nd) (num 32) (num 96))) (counter (call number.le (slice (name nd) (num 96) (num 104)))) "
             "(length (call number.le (slice (name nd) (num 104) (num 112)))) (flags (call number.le (slice (name nd) (num 112) (num 120))))) "
@@ -106,7 +106,7 @@ class Statement(unittest.TestCase):
                 ("a need on a condition of what is no register", once(NEEDS_IF + IF, NEEDS_IF + "if nd == 5"), "condition"),
                 ("a need on a condition of a sum", once(NEEDS_IF + IF, NEEDS_IF + "if plat + 1 == 6"), "condition"),
                 ("an expression that speaks of an argument of the kind `any`", once("node_value(nd, root)", "node_value(nd, plat)"), "`any`"),
-                ("no `requires no_overlap`", once("    requires no_overlap(out, nd)\n", ""), "no_overlap")):
+                ("no `requires disjoint`", once("    requires disjoint(out, nd, 1)\n", ""), "disjoint")):
             with self.subTest(what=what):
                 with self.assertRaises((SystemExit, Exception)) as e: self.lines(change)
                 self.assertIn(word, str(e.exception))
@@ -157,7 +157,7 @@ class Meaning(unittest.TestCase):
         self.assertEqual(self.lean(cases), want)
 
     def test_a_record_in_memory_means_what_its_layout_says(self):
-        record = CONTRACT[11][len("ensuresw out (call bytes_of (call node_value "):-len(" (name root)))")]
+        record = CONTRACT[12][len("ensuresw out (call bytes_of (call node_value "):-len(" (name root)))")]
         self.assertTrue(record.startswith("(record (h ") and record.endswith(")))))"), record)
         rng = random.Random(42)
         cases, want = [], []
@@ -181,13 +181,13 @@ class Meaning(unittest.TestCase):
         for n in (0, 1, 3, 31, 63, 64):
             message = bytes(rng.randrange(256) for _ in range(n))
             nd = iv + message.ljust(64, b"\0") + (0).to_bytes(8, "little") + n.to_bytes(8, "little") + (3).to_bytes(8, "little")   # CHUNK_START | CHUNK_END
-            cases.append((CONTRACT[11][len("ensuresw out "):], {"nd": nd, "root": 8}))                                                 # ROOT
+            cases.append((CONTRACT[12][len("ensuresw out "):], {"nd": nd, "root": 8}))                                                 # ROOT
             want.append("bytes " + bytes(spec.eval(ode.Numbers(), ("call", "blake3", [("name", "m")]), {"m": list(message)})).hex())
         self.assertEqual(self.lean(cases), want)
         # a control: with the length and the flags laid out the other way round, the empty message's value is another
         swapped = [l for l in statement.statement(spec_text(once("length: number at 104 below 65, flags: byte at 112", "length: number at 112 below 65, flags: byte at 104")), FUNCTIONS)
                    if l.startswith("ensuresw out ")][0]
-        self.assertNotEqual(swapped, CONTRACT[11])
+        self.assertNotEqual(swapped, CONTRACT[12])
         got = self.lean([(swapped[len("ensuresw out "):], env) for _, env in cases])
         self.assertTrue(got[0].startswith("bytes ") and got[0] != want[0], got[0])
 
@@ -369,7 +369,7 @@ class Verify(unittest.TestCase):
         # refused before the verifier: what the statement cannot say
         for what, old, new, word in (
                 ("the value with `plat` for root", "node_value(nd, root)", "node_value(nd, plat)", "of the kind `any`: an expression cannot speak of it"),
-                ("no `no_overlap`", "    requires no_overlap(out, nd)\n", "", "does not say `requires no_overlap(out, nd)`"),
+                ("no `no_overlap`", "    requires disjoint(out, nd, 1)\n", "", "does not say `requires disjoint(out, nd, 1)`"),
                 ("the block at another place", "block: 64 bytes at 32", "block: 64 bytes at 28", "have a byte in common")):
             with self.subTest(what=what):
                 try: said = last_word(FUNCTIONS, once(old, new))

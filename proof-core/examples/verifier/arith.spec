@@ -40,7 +40,7 @@ contract v_row_contradicts_x86(coeffs: n bytes, n: number, pos: number, neg: num
 }
 
 contract v_row_sum16_x86(out: block, a: block, b: block) {
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     ensures out = sum16(a, b)
     stack 0
     needs avx512
@@ -61,7 +61,7 @@ contract v_row_contradicts_arm64(coeffs: n bytes, n: number, pos: number, neg: n
 }
 
 contract v_row_sum16_arm64(out: block, a: block, b: block) {
-    requires no_overlap(out, a, b)
+    requires disjoint(out, a, b, 1)
     ensures out = sum16(a, b)
     stack 0
 }

@@ -1342,12 +1342,13 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
         obtain ⟨s1, _, e0, htail⟩ := V.bind_ok htail
         obtain ⟨_, _, e1, htail⟩ := V.bind_ok htail
         obtain ⟨s', _, e2, htail⟩ := V.bind_ok htail
+        obtain ⟨_, _, edj, htail⟩ := V.bind_ok htail
         split at htail
         next => exact (refuse_ok htail).elim
         next hcq =>
         have c1 := symKnow_sound KNOWN e0 H wf
         have T1 := symKnow_tailOk T KNOWN e0
-        have EX := tailPreOk_sound E T1 c1.holds e1
+        have EX := tailPreOk_sound E T1 c1.holds e1 edj
         obtain ⟨q, hq, fitq, meets⟩ := W name c hl2
         obtain ⟨hpre, hread, hwrite, hpost⟩ := tailCall'_sound E T1 EX e2 c1.holds c1.wf q fitq
         have hbd : ∀ r m, ctx.recBound name c s0 = some (r, m) → (afterTail q st).reg r < m := by
@@ -3257,7 +3258,7 @@ theorem forResult_pre (c : Contract) (rh : List String) (p : Program) (s : State
   have h3 : (c.forResult rh).slot = c.slot := rfl
   have h4 : (c.forResult rh).preLines = c.preLines := rfl
   have h5 : (c.forResult rh).aligns = c.aligns := rfl
-  have h6 : (c.forResult rh).lineDisjoint = c.lineDisjoint := rfl
+  have h6 : (c.forResult rh).disjoint = c.disjoint := rfl
   simp only [forResult_regions, forResult_regOf, forResult_tableAt, forResult_stackAt, forResult_preLineVal, forResult_valArrays, forResult_bufSpan, h1, h2, h3, h4, h5, h6]
   rfl
 
@@ -3374,6 +3375,7 @@ theorem step_trace {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 : Sta
         obtain ⟨s1, _, e0, htail⟩ := V.bind_ok htail
         obtain ⟨_, _, e1, htail⟩ := V.bind_ok htail
         obtain ⟨s', _, e2, htail⟩ := V.bind_ok htail
+        obtain ⟨_, _, edj, htail⟩ := V.bind_ok htail
         split at htail
         next => exact (refuse_ok htail).elim
         next hcq =>
@@ -3411,8 +3413,8 @@ theorem step_trace {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 : Sta
         have hqeq : s1.q = s.q := (symKnow_sp KNOWN e0).2.1
         have Ma1 : MarksOk ctx a0 s1.q sta := hqeq ▸ Ma
         have Mb1 : MarksOk ctx b0 s1.q stb := hqeq ▸ Mb
-        have EXa := tailPreOk_sound Ea T1 c1a.holds e1
-        have EXb := tailPreOk_sound Eb T1 c1b.holds e1
+        have EXa := tailPreOk_sound Ea T1 c1a.holds e1 edj
+        have EXb := tailPreOk_sound Eb T1 c1b.holds e1 edj
         obtain ⟨hprea, _, hwritea, _⟩ := tailCall'_sound Ea T1 EXa e2 c1a.holds c1a.wf q fitq
         obtain ⟨hpreb, _, hwriteb, _⟩ := tailCall'_sound Eb T1 EXb e2 c1b.holds c1b.wf q fitq
         have hbda : ∀ r m, ctx.recBound name c a0 = some (r, m) → (afterTail q sta).reg r < m := by
@@ -4517,6 +4519,7 @@ theorem step_runsT {world : List Program} {ctx : Ctx} {p : Program} {s0 : State}
         obtain ⟨s1, _, e0, htail⟩ := V.bind_ok htail
         obtain ⟨_, _, e1, htail⟩ := V.bind_ok htail
         obtain ⟨s', _, e2, htail⟩ := V.bind_ok htail
+        obtain ⟨_, _, edj, htail⟩ := V.bind_ok htail
         split at htail
         next => exact (refuse_ok htail).elim
         next hcq =>
@@ -4530,7 +4533,7 @@ theorem step_runsT {world : List Program} {ctx : Ctx} {p : Program} {s0 : State}
         have T1 := symKnow_tailOk T KNOWN e0
         have hqeq : s1.q = s.q := (symKnow_sp KNOWN e0).2.1
         have M1 : MarksOk ctx s0 s1.q st := hqeq ▸ M
-        have EX := tailPreOk_sound E T1 c1.holds e1
+        have EX := tailPreOk_sound E T1 c1.holds e1 edj
         obtain ⟨hpre, _, hwrite, _⟩ := tailCall'_sound E T1 EX e2 c1.holds c1.wf q fitq
         have hbd : ∀ r m, ctx.recBound name c s0 = some (r, m) → (afterTail q st).reg r < m := by
           intro r m hb; unfold Ctx.recBound at hb

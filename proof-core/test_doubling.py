@@ -33,7 +33,7 @@ DOUBLING = os.path.join(HERE, "examples", "doubling")
 NAME, SSE41 = "ode_left_last", "blake3_servil_compress_in_place_sse41"
 FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), SSE41), (os.path.join(DOUBLING, "odedoubling.o"), NAME)]
 BLOCK = "input[1024 * left_chunks(input) - 64 .. 1024 * left_chunks(input)]"
-CONTRACT = ["arg h inout 32", "arg input bytes len", "arg len number", "needs sse41", "atleast len 1025", "hidden input",
+CONTRACT = ["arg h inout 32", "arg input bytes len", "arg len number", "needs sse41", "atleast len 1025", "disjoint h input 1", "hidden input",
             "ensuresw h (call bytes_of (call compress (call words (name h)) (call words (slice (name input) "
             "(bin - (bin * (num 1024) (call left_chunks (name input))) (num 64)) (bin * (num 1024) (call left_chunks (name input))))) "
             "(call counter (num 0)) (num 64) (num 0)))",

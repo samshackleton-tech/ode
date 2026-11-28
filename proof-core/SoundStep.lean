@@ -789,12 +789,12 @@ theorem valArray {x : String} {r l ch el : Nat} (h : (x, r, l, ch, el) ∈ ctx.c
     (s0.reg r + el * (s0.reg l / ch) ≤ s0.reg RSP - ctx.contract.stackAt s0 ∨ s0.reg RSP + ctx.contract.slot ≤ s0.reg r) ∧
     ∀ x' r' n', (x', r', n') ∈ ctx.contract.outs → s0.reg r + el * (s0.reg l / ch) ≤ s0.reg r' ∨ s0.reg r' + n' ≤ s0.reg r :=
   E.pre.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1 x r l ch el h
-/-- Each declared buffer alignment precondition holds at entry. -/
+/-- Each declared parameter alignment precondition holds at entry. -/
 theorem align {x : String} {al r : Nat} (h : (x, al) ∈ ctx.contract.aligns) (hpos : 0 < al) (hr : ctx.contract.regOf x = some r) :
     s0.reg r % al = 0 :=
   E.pre.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1 x al h hpos r hr
-/-- Each declared cache-line disjointness precondition holds at entry. -/
-theorem lineDisjoint {x y : String} {L bx lx by_ ly : Nat} (h : (x, y, L) ∈ ctx.contract.lineDisjoint) (hL : 0 < L)
+/-- Each declared granule-disjointness precondition holds at entry. -/
+theorem disjoint {x y : String} {L bx lx by_ ly : Nat} (h : (x, y, L) ∈ ctx.contract.disjoint) (hL : 0 < L)
     (hx : ctx.contract.bufSpan s0 x = some (bx, lx)) (hy : ctx.contract.bufSpan s0 y = some (by_, ly)) :
     ∀ i < lx, ∀ j < ly, (bx + i) / L ≠ (by_ + j) / L :=
   E.pre.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2 x y L h hL bx lx by_ ly hx hy

@@ -14,7 +14,7 @@ fn b64_dec(c: u8) -> u64
 }
 
 fn ct_base64_decode(out: 192 bytes, src: n bytes, n: number)
-    requires no_overlap(out, src)
+    requires disjoint(out, src, 1)
     requires n >= 256
     requires n <= 256
     ensures out = spec.b64_decode(src)

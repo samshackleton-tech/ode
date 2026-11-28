@@ -50,11 +50,11 @@ KCHECK = os.path.join(HERE, "..", "kcheck")
 LAKE = lean_verify.LAKE
 SYMBOL = "blake3_servil_compress_in_place_avx512"
 SSE41 = "blake3_servil_compress_in_place_sse41"
-CONTRACT = ["arg h inout 32", "arg m fixed 64", "arg length number", "arg t number", "arg flags number", "needs avx512", "hidden m",
+CONTRACT = ["arg h inout 32", "arg m fixed 64", "arg length number", "arg t number", "arg flags number", "needs avx512", "disjoint h m 1", "hidden m",
             "hidden length", "hidden t", "hidden flags",
             "ensuresw h (call bytes_of (call compress (call words (name h)) (call words (name m)) (call counter (name t)) "
             "(bin % (name length) (num 256)) (bin % (name flags) (num 256))))", "stack 0"]
-CONTRACT_SSE41 = ["arg h inout 32", "arg m fixed 64", "arg length number", "arg t number", "arg flags number", "below length 4294967296", "needs sse41", "hidden m",
+CONTRACT_SSE41 = ["arg h inout 32", "arg m fixed 64", "arg length number", "arg t number", "arg flags number", "below length 4294967296", "needs sse41", "disjoint h m 1", "hidden m",
                   "hidden length", "hidden t", "hidden flags",
                   "ensuresw h (call bytes_of (call compress (call words (name h)) (call words (name m)) (call counter (name t)) "
                   "(name length) (bin % (name flags) (num 4294967296))))", "stack 0"]
@@ -189,7 +189,7 @@ class StatementTests:
 
     def test_a_contract_that_promises_more_or_other_than_is_read_is_refused(self):
         for what, old, new, why in [
-                ("no line of what overlaps", "    requires no_overlap(h, m)\n", "", "does not say `requires no_overlap(h, m)`"),
+                ("no line of what overlaps", "    requires disjoint(h, m, 1)\n", "", "does not say `requires disjoint(h, m, 1)`"),
                 ("a part of the words", "ensures h = compress", "ensures h[0 .. 16] = compress", "of a part of a run of words"),
                 ("a number returned too", "    stack 0\n", "    returns length\n    stack 0\n", "returns a number beside arguments of the kinds"),
                 ("a kind not read", "m: block", "m: 16 words", "an argument of a kind the verifier in Lean does not read yet: m: 16 words"),

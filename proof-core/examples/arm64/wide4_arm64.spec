@@ -4,7 +4,7 @@
 // Constant-time (no `trace depends on` clause).
 
 contract b3l_wide4_arm64(out: cv, input: 4096 bytes, kf: keyed, t: number) {
-    requires no_overlap(out, input, kf)
+    requires disjoint(out, input, kf, 1)
     requires 1024 * t + 4096 <= 18446744073709551615
     ensures out = subtree(kf.key, kf.flags, t, input)
     stack 544

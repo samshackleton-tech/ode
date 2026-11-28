@@ -136,7 +136,7 @@ facts allow. Where no case below applies, it refuses.
    - Each address argument of the contract has its own region, and `N inputs` adds one region `(name, i)`
      of `64 * n` bytes per lane `i` in `0 .. N - 1` (`64 * n < 2^64`). A function that writes an address
      argument (`kbyte.py`) or takes two or more address arguments (`kfn.py`) must state
-     `requires no_overlap(...)` over its address arguments. Arguments outside `writes` are read-only.
+     `requires disjoint(...)` over its address arguments. Arguments outside `writes` are read-only.
 2. On entry, a read-only argument holds an arbitrary value of its kind with that kind's bounds:
    `0 <= x < B` on a layout's `number ... below B` field, and zeros in the upper seven bytes of a `byte`
    field. For an argument in `writes`:
@@ -175,7 +175,7 @@ bounds the caller left uninitialized.
      `off + size <= 0`, placing `[off, off + size)` at or above `sp` and apart from
      `[sp - (8 + callee_stack), sp)` where the return address and the callee's frame lie;
    - in an argument region, `0 <= size` and `lo <= off <= off + size <= hi` for that region's extent.
-5. Every pair in the callee's `requires no_overlap(...)` (and in `kfn.py` every argument in
+5. Every pair in the callee's `requires disjoint(...)` (and in `kfn.py` every argument in
    `callee.writes` against every other argument) must have no byte in common. Spans in distinct argument
    regions rely on the caller's own `no_overlap` (`frame` is already separate from argument regions). Spans
    in one region require `o1 + s1 <= o2` or `o2 + s2 <= o1`.
