@@ -6,7 +6,7 @@ components that already have complete declarative specifications in this reposit
 Lean 4 projects.
 
 Every table below uses the same status words:
-- **`shown`**: verified by the Lean 4 verifier `odeverify` from the compiled object bytes.
+- **`shown`**: verified from the compiled object bytes (by the Lean 4 verifier `odeverify`, and where noted cross-checked by the standalone pure-Python verifier `verify2.py` via `--verifier both`).
 - **`legacy-kcheck`**: verified by the older Python verifier in `kcheck/programs/`, not yet migrated to `odeverify`.
 - **`spec-ready`**: complete declarative specification exists; implementation pending in the Spec-First AI Factory.
 - **`planned`**: target queued for specification and implementation.
@@ -22,7 +22,7 @@ and current verification status on x86-64 and AArch64.
 
 | Target | Category | Existing Ode Spec | Open-Source Lean 4 Spec | x86-64 | AArch64 |
 |---|---|---|---|---|---|
-| **BLAKE3 (full single-threaded hash)** | Crypto | `kcheck/blake3.spec` + `proof-core/examples/hashr_fast/` + `proof-core/examples/hashr_arm64_fast/` | `c2sp/BLAKE3` (in-repo) | **`shown`** (17 fns, 3,202 insns; 1.29 GiB/s @ 64 B, 16.34 GiB/s @ 256 KiB Zen 5) | **`shown`** (8 fns, 1,891 insns, 100% Ode + 4-way NEON; 1.18 GiB/s @ 64 B, 2.28 GiB/s @ 4 KiB M6, build machine without timing lock) |
+| **BLAKE3 (full single-threaded hash)** | Crypto | `kcheck/blake3.spec` + `proof-core/examples/hashr_fast/` + `proof-core/examples/hashr_arm64_fast/` | `c2sp/BLAKE3` (in-repo) | **`shown`** (dual-verified `both`: 14-fn & 19-fn AVX-512; pure HL 512-bit `compress_4way`; 1.29 GiB/s @ 64 B, 16.34 GiB/s @ 256 KiB Zen 5) | **`shown`** (dual-verified `both`: 7-fn & 8-fn NEON; pure HL 4-way NEON `compress_4way`; 1.18 GiB/s @ 64 B, 2.28 GiB/s @ 4 KiB M6, build machine without timing lock) |
 | **Base64 (RFC 4648 strict encode + decode)** | Encoding | `kcheck/programs/base64/base64.spec`, `factory/verified/base64_*` | `predictable-machines/lean4-base64` (MIT: `Encode.lean`, `Decode.lean`) | **`shown`** (`char_val` 1.62x opt, `encode_char`, `valid_quad`) | **`shown`** (`char_val` 1.55x opt, `encode_char`, `valid_quad`) |
 | **UTF-8 (RFC 3629 strict validator + code-point counter)** | Encoding | `proof-core/examples/utf8/utf8_unified.ode`, `kcheck/programs/utf8/utf8.spec` | `Proven-Commons/utf` (Apache-2.0: `Utf/Proofs/{Decode,Encode}.lean`) | **`shown`** (full, `stack 0`, 107 insns) | **`shown`** (full, `stack 0`, 87 insns) |
 | **Varint / LEB128 (encode + strict decode)** | Wire codec | `kcheck/programs/varint/varint.spec`, `factory/verified/varint_decode_u32_*` | `Lean-zh/protobuf` (MIT) | **`shown`** (encode + canonical `decode_u32`) | **`shown`** (canonical `decode_u32`) |
@@ -32,7 +32,7 @@ and current verification status on x86-64 and AArch64.
 | **Common byte prefix / constant-time byte equality** | Utility | `proof-core/examples/hasher/hash_eq_ct.ode`, `kcheck/programs/common/common.spec`, `proof-core/examples/equal/equal.spec` | — | **`shown`** (`ct_bytes_eq`, `stack 0`, `trace depends on n`, 21 insns) | **`shown`** (`ct_bytes_eq`, `stack 0`, `trace depends on n`, 20 insns) |
 | **LZ4 block decompressor + LZ4/Adler frame** | Compression | `kcheck/programs/lz4/lz4.spec` (109 lines), `factory/verified/lz4_*` | — | **`shown`** (`ext_len`, `pad_lit32`) / `legacy-kcheck` (full) | **`shown`** (`ext_len`, `pad_lit32`) |
 | **Sigil (byte-to-glyph codec)** | Encoding | `kcheck/programs/sigil/sigil.spec` (175 lines) | `johnservil/sigil` (Apache-2.0: `lean/Sigil/Spec.lean`) | `spec-ready` | `spec-ready` |
-| **Verifier-in-Ode Stage 1 (`Arithmetic.refutes` + `Reader` + `decode`)** | Self-hosting | `proof-core/examples/verifier/arith.spec`, `factory/verified/v_*` | `proof-core/Arithmetic.lean`, `Reader.lean`, `Core.lean` | **`shown`** (5 fns) | **`shown`** (5 fns) |
+| **Verifier-in-Ode Stages 1–2 (`Arithmetic.refutes` + `Core.plain` + `Reader`)** | Self-hosting | `proof-core/examples/verifier/verifier_hl.ode`, `arith.spec` | `proof-core/Arithmetic.lean`, `Reader.lean`, `Core.lean` | **`shown`** (dual-verified `both`: 8 pure HL kernels + 5 Stage 1) | **`shown`** (dual-verified `both`: 8 pure HL kernels + 5 Stage 1) |
 
 ---
 
@@ -47,7 +47,7 @@ the Lean 4 reference repository and license, and current Ode status.
 | **PNG chunk parser + CRC-32** | Image / framing | Classic `libpng` bounds and checksum verification | `Proven-Commons/png` (Apache-2.0: `Parse.lean`, `Header.lean`, `Crc32.lean`) | `planned` |
 | **CRC32C (hardware + software)** | Checksum | Storage and networking integrity | `ryancbuckley/lean-verified-crc32c` (Apache-2.0: `MemcpyCrc32c/`) | `planned` |
 | **ASN.1 / DER TLV + X.509 parser** | Binary wire | Prevents DER length malleability and certificate over-reads | `keithadler/lean-x509` (MIT: `X509/Der.lean`, `Cert.lean`) | **`shown`** (`der_tlv_len`, `der_walk_seq` on x86-64 & AArch64) |
-| **ChaCha20 & Poly1305 (RFC 8439)** | Crypto | Constant-time SIMD AEAD cipher | `Egly443/chacha20-poly1305-aarch64-lean` (Apache-2.0) | **`shown`** (`qround_4x`, `double_round_4x`, full 20-round `chacha20_block`, 16-block AVX-512 `blocks16` + 4-block NEON `blocks4`) |
+| **ChaCha20 & Poly1305 (RFC 8439)** | Crypto | Constant-time SIMD AEAD cipher | `Egly443/chacha20-poly1305-aarch64-lean` (Apache-2.0) | **`shown`** (dual-verified `both`: pure HL 512-bit AVX-512 & 4-way NEON `chacha20_4way`, 20-round `chacha20_block`, `blocks16`/`blocks4`) |
 | **SipHash-2-4 / SipHash-1-3** | Crypto / DoS | Hash-table flooding defense | `8vasu/SipHash` (Apache-2.0: `SipHash.lean` + vectors) | `planned` |
 | **QOI (Quite OK Image) decoder** | Image codec | Fast one-page lossless image codec | `zyansheep/qoi-zig-lean` (Lean 4 spec + Zig comparison) | `planned` |
 | **Zstandard (RFC 8878) decompressor** | Compression | Major production compression format (FSE, Huffman, sequences) | `kim-em/lean-zstd` (Apache-2.0: `Zstd/Spec/{Base,BlockLoop,Complete}.lean`) | `planned` |
@@ -59,7 +59,7 @@ the Lean 4 reference repository and license, and current Ode status.
 | **Bech32 / Bech32m checksum (BIP 173/350)** | Encoding / checksum | Pure `polymod` / `hrpExpand` for keys and addresses | `Proven-Commons/bech32` (Apache-2.0: `Spec/Defs.lean`) | `planned` |
 | **AES S-Box & GF(2^m) bit-sliced circuits** | Crypto / erasure coding | Constant-time bitsliced AES and GF(2^8) Reed-Solomon | `Swapnil-jain/gf2m-circuits` (Apache-2.0: `sbox/lean/Sbox106.lean`) | `planned` |
 | **BLAKE2b/2s, SHA-2, Keccak-p[1600]/SHA-3, Poseidon/Poseidon2** | Crypto / ZK | Zero-monad `Reference.lean` hash suite | `Verified-zkEVM/hash-specs` (Apache-2.0, 108 files); `NethermindEth/poseidon2-fv` (BabyBear width-16) | `planned` |
-| **Brotli decompressor (RFC 7932)** | Compression | Prefix codes and sliding-window decompression | `therealmarrakesh/formal-brotli` (`Brotli/Spec/`) | `planned` |
+| **Brotli decompressor (RFC 7932)** | Compression | Prefix codes, headers, and sliding-window decompression | `therealmarrakesh/formal-brotli` (`Brotli/Spec/`) | **`shown`** (dual-verified `both`: 9 pure HL core kernels in `proof-core/examples/brotli/brotli_core.ode`, x86-64 & AArch64) |
 | **Additional wire & text codecs (`Proven-Commons`)** | Parsers / codecs | SQLite page/record reader, MessagePack, tar, protobuf, Punycode, TLS 1.3 ClientHello, WebSocket, JSON, CSV, UUID, IP, bencode | `Proven-Commons/*` (Apache-2.0, standalone spec repos) | `planned` |
 
 **Lean 4 spec watch-outs:**

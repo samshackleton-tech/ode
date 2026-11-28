@@ -22,7 +22,7 @@ Ode is built for **Bob**, the skeptical auditor. Bob reads a short declarative c
 3. **Separate proof-carrying artifacts.** `ode pack` produces a standard ELF64 object file (`.o`, with the canonical contract embedded in `.ode.ocl`) and a separate `.proof` file whose arithmetic refutation steps carry explicit rows (`r ...`), independent of any verifier's internal fact order.
 4. **Two independent verifiers.**
    - **`proof-core/odeverify`** (Lean 4) — proved sound in Lean 4 against formal x86-64 and AArch64 machine semantics (`SoundTop.lean`, zero `sorry`, standard axioms only).
-   - **`proof-core/verify2.py`** (pure Python) — an independent second verifier sharing zero verification code with Lean, checking the exact same `.statement` and `.proof` files.
+   - **`proof-core/verify2.py`** (pure Python) — an independent second verifier sharing zero verification code with Lean, checking the exact same `.statement` and order-independent (`r ...`) `.proof` files across scalar, SIMD, and all four full multi-function BLAKE3-Servil bundles (x86-64 AVX-512 and AArch64 NEON) via `--verifier both` or `--verifier verify2`.
 5. **Four exact verdicts:** `shown`, `refused with a proof`, `no proof found`, and `run`.
 
 ---
@@ -31,14 +31,15 @@ Ode is built for **Bob**, the skeptical auditor. Bob reads a short declarative c
 
 ```bash
 # Type-check, compile, and verify a single function during development
-python3 lang/ode_tool.py check paper/examples/all_zero.ode --target arm64
+python3 lang/ode_tool.py check paper/examples/all_zero_hl.ode --target arm64
 
-# Compile, prove, and audit a release ELF64 .o + separate .proof bundle
-python3 lang/ode_tool.py pack paper/examples/all_zero.ode --target arm64 \
-    --out /tmp/all_zero.o --proof /tmp/all_zero.proof
+# Compile, prove, and dual-verify a release ELF64 .o + separate .proof bundle
+python3 lang/ode_tool.py pack paper/examples/all_zero_hl.ode --c-abi --target arm64 \
+    --verifier both --out /tmp/all_zero.o --proof /tmp/all_zero.proof
 
-# Audit an object file and proof bundle against an expected contract ID
-python3 lang/ode_tool.py audit /tmp/all_zero.o --proof /tmp/all_zero.proof \
+# Audit an object file and proof bundle with both independent verifiers
+# (pass --verifier verify2 to audit with pure Python alone, without Lean installed)
+python3 lang/ode_tool.py audit /tmp/all_zero.o --proof /tmp/all_zero.proof --verifier both \
     --expect-contract jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika
 ```
 

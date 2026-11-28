@@ -1,0 +1,452 @@
+// RFC 7932 Brotli Decompressor Core in 100% pure High-Level Ode.
+// Portable across x86-64 and AArch64; dual-verified (`--verifier both`) with identical
+// 52-character BLAKE3-256 contract identifiers across both processors.
+
+// ---------------------------------------------------------------------------
+// 1. RFC 7932 §9.1 Stream Header: WBITS decoder (10..24, or 0 for reserved 0x11)
+// ---------------------------------------------------------------------------
+def wbits_of(b0) {
+    if b0 % 2 == 0 then 16
+    else if (b0 / 2) % 8 != 0 then 17 + ((b0 / 2) % 8)
+    else if (b0 / 16) % 8 == 0 then 17
+    else if (b0 / 16) % 8 == 1 then 0
+    else 8 + ((b0 / 16) % 8)
+}
+
+fn brotli_wbits(b0: u8)
+    returns wbits_of(b0)
+    trace depends on b0
+    stack 0
+{
+    if (b0 & 1) == 0 { return 16 }
+    let lo3: u64 := (b0 >> 1) & 7
+    if lo3 != 0 { return 17 + lo3 }
+    let hi3: u64 := (b0 >> 4) & 7
+    if hi3 == 0 { return 17 }
+    if hi3 == 1 { return 0 }
+    return 8 + hi3
+}
+
+// ---------------------------------------------------------------------------
+// 2. RFC 7932 §3.5 Canonical Prefix-Code Kraft Validator (`sum == 32768`)
+//    Rejects both oversubscribed (> 32768) and incomplete (< 32768) trees.
+// ---------------------------------------------------------------------------
+def kraft_sum(counts) {
+    counts[1] * 16384 + counts[2] * 8192 + counts[3] * 4096 + counts[4] * 2048
+    + counts[5] * 1024 + counts[6] * 512 + counts[7] * 256 + counts[8] * 128
+    + counts[9] * 64 + counts[10] * 32 + counts[11] * 16 + counts[12] * 8
+    + counts[13] * 4 + counts[14] * 2 + counts[15]
+}
+
+def huffman_complete(counts) {
+    if kraft_sum(counts) == 32768 then 1 else 0
+}
+
+fn brotli_huffman_complete(counts: n bytes, n: number)
+    requires n >= 16
+    returns huffman_complete(counts)
+    trace depends on counts, n
+    stack 0
+{
+    var acc: u64 := 0
+    for k in 1..15 unroll {
+        let c: u64 := counts[k]
+        acc += c << (15 - k)
+    }
+    let c15: u64 := counts[15]
+    acc += c15
+    if acc == 32768 { return 1 }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// 3. RFC 7932 §6 Insert-and-Copy Command Symbol Splitter (`sym` in `0..703`)
+//    Returns `(dist0 << 16) + (insert_code << 8) + copy_code`, or `4294967295` if `sym >= 704`.
+// ---------------------------------------------------------------------------
+def iac_ins_base(r) {
+    if r == 4 || r == 5 || r == 8 then 8
+    else if r == 7 || r == 9 || r == 10 then 16
+    else 0
+}
+
+def iac_copy_base(r) {
+    if r == 1 || r == 3 || r == 5 || r == 9 then 8
+    else if r == 6 || r == 8 || r == 10 then 16
+    else 0
+}
+
+def iac_pack(r, ins_off, copy_off) {
+    (if r < 2 then 65536 else 0)
+    + (iac_ins_base(r) + ins_off) * 256
+    + (iac_copy_base(r) + copy_off)
+}
+
+def iac_split(sym) {
+    if sym >= 704 then 4294967295
+    else iac_pack(sym / 64, (sym / 8) % 8, sym % 8)
+}
+
+fn brotli_iac_split(sym: number)
+    returns iac_split(sym)
+    trace depends on sym
+    stack 0
+{
+    if sym >= 704 {
+        let one: u64 := 1
+        return (one << 32) - 1
+    }
+    let r: u64 := sym >> 6
+    let ins_off: u64 := (sym >> 3) & 7
+    let copy_off: u64 := sym & 7
+    if r == 0 { return 65536 + (ins_off << 8) + copy_off }
+    if r == 1 { return 65536 + (ins_off << 8) + (8 + copy_off) }
+    if r == 2 { return (ins_off << 8) + copy_off }
+    if r == 3 { return (ins_off << 8) + (8 + copy_off) }
+    if r == 4 { return ((8 + ins_off) << 8) + copy_off }
+    if r == 5 { return ((8 + ins_off) << 8) + (8 + copy_off) }
+    if r == 6 { return (ins_off << 8) + (16 + copy_off) }
+    if r == 7 { return ((16 + ins_off) << 8) + copy_off }
+    if r == 8 { return ((8 + ins_off) << 8) + (16 + copy_off) }
+    if r == 9 { return ((16 + ins_off) << 8) + (8 + copy_off) }
+    return ((16 + ins_off) << 8) + (16 + copy_off)
+}
+
+// ---------------------------------------------------------------------------
+// 4. RFC 7932 §6 Insert Length Decoder (all 24 codes `0..23`)
+// ---------------------------------------------------------------------------
+def insert_len(code, extra) {
+    if code < 6 then code
+    else if code == 6 then 6 + (extra % 2)
+    else if code == 7 then 8 + (extra % 2)
+    else if code == 8 then 10 + (extra % 4)
+    else if code == 9 then 14 + (extra % 4)
+    else if code == 10 then 18 + (extra % 8)
+    else if code == 11 then 26 + (extra % 8)
+    else if code == 12 then 34 + (extra % 16)
+    else if code == 13 then 50 + (extra % 16)
+    else if code == 14 then 66 + (extra % 32)
+    else if code == 15 then 98 + (extra % 32)
+    else if code == 16 then 130 + (extra % 64)
+    else if code == 17 then 194 + (extra % 128)
+    else if code == 18 then 322 + (extra % 256)
+    else if code == 19 then 578 + (extra % 512)
+    else if code == 20 then 1090 + (extra % 1024)
+    else if code == 21 then 2114 + (extra % 4096)
+    else if code == 22 then 6210 + (extra % 16384)
+    else 22594 + (extra % 16777216)
+}
+
+fn brotli_insert_len(code: number, extra: number)
+    requires code < 24
+    returns insert_len(code, extra)
+    trace depends on code, extra
+    stack 0
+{
+    if code < 6 { return code }
+    if code == 6 { return 6 + (extra & 1) }
+    if code == 7 { return 8 + (extra & 1) }
+    if code == 8 { return 10 + (extra & 3) }
+    if code == 9 { return 14 + (extra & 3) }
+    if code == 10 { return 18 + (extra & 7) }
+    if code == 11 { return 26 + (extra & 7) }
+    if code == 12 { return 34 + (extra & 15) }
+    if code == 13 { return 50 + (extra & 15) }
+    if code == 14 { return 66 + (extra & 31) }
+    if code == 15 { return 98 + (extra & 31) }
+    if code == 16 { return 130 + (extra & 63) }
+    if code == 17 { return 194 + (extra & 127) }
+    if code == 18 { return 322 + (extra & 255) }
+    if code == 19 { return 578 + (extra & 511) }
+    if code == 20 { return 1090 + (extra & 1023) }
+    if code == 21 { return 2114 + (extra & 4095) }
+    if code == 22 { return 6210 + (extra & 16383) }
+    let one: u64 := 1
+    let mask24: u64 := (one << 24) - 1
+    return 22594 + (extra & mask24)
+}
+
+// ---------------------------------------------------------------------------
+// 5. RFC 7932 §6 Copy Length Decoder (all 24 codes `0..23`)
+// ---------------------------------------------------------------------------
+def copy_len(code, extra) {
+    if code < 8 then 2 + code
+    else if code == 8 then 10 + (extra % 2)
+    else if code == 9 then 12 + (extra % 2)
+    else if code == 10 then 14 + (extra % 4)
+    else if code == 11 then 18 + (extra % 4)
+    else if code == 12 then 22 + (extra % 8)
+    else if code == 13 then 30 + (extra % 8)
+    else if code == 14 then 38 + (extra % 16)
+    else if code == 15 then 54 + (extra % 16)
+    else if code == 16 then 70 + (extra % 32)
+    else if code == 17 then 102 + (extra % 32)
+    else if code == 18 then 134 + (extra % 64)
+    else if code == 19 then 198 + (extra % 128)
+    else if code == 20 then 326 + (extra % 256)
+    else if code == 21 then 582 + (extra % 512)
+    else if code == 22 then 1094 + (extra % 1024)
+    else 2118 + (extra % 16777216)
+}
+
+fn brotli_copy_len(code: number, extra: number)
+    requires code < 24
+    returns copy_len(code, extra)
+    trace depends on code, extra
+    stack 0
+{
+    if code < 8 { return 2 + code }
+    if code == 8 { return 10 + (extra & 1) }
+    if code == 9 { return 12 + (extra & 1) }
+    if code == 10 { return 14 + (extra & 3) }
+    if code == 11 { return 18 + (extra & 3) }
+    if code == 12 { return 22 + (extra & 7) }
+    if code == 13 { return 30 + (extra & 7) }
+    if code == 14 { return 38 + (extra & 15) }
+    if code == 15 { return 54 + (extra & 15) }
+    if code == 16 { return 70 + (extra & 31) }
+    if code == 17 { return 102 + (extra & 31) }
+    if code == 18 { return 134 + (extra & 63) }
+    if code == 19 { return 198 + (extra & 127) }
+    if code == 20 { return 326 + (extra & 255) }
+    if code == 21 { return 582 + (extra & 511) }
+    if code == 22 { return 1094 + (extra & 1023) }
+    let one: u64 := 1
+    let mask24: u64 := (one << 24) - 1
+    return 2118 + (extra & mask24)
+}
+
+// ---------------------------------------------------------------------------
+// 6. RFC 7932 §1.4 Bounds-Checked LSB-First 24-Bit Stream Window Reader
+//    Reads bits `[bit_pos .. bit_pos + 24)` from `buf[0..n)` without over-reading;
+//    returns `4294967295` if `(bit_pos / 8) + 4 > n`.
+// ---------------------------------------------------------------------------
+def u32_le(buf, o) {
+    buf[o] + buf[o + 1] * 256 + buf[o + 2] * 65536 + buf[o + 3] * 16777216
+}
+
+def pow2_3(k) {
+    if k == 0 then 1
+    else if k == 1 then 2
+    else if k == 2 then 4
+    else if k == 3 then 8
+    else if k == 4 then 16
+    else if k == 5 then 32
+    else if k == 6 then 64
+    else 128
+}
+
+def read_bits24_at(buf, byte_off, sh) {
+    if byte_off + 4 > len(buf) then 4294967295
+    else (u32_le(buf, byte_off) / pow2_3(sh)) % 16777216
+}
+
+def read_bits24(buf, bit_pos) {
+    read_bits24_at(buf, bit_pos / 8, bit_pos % 8)
+}
+
+fn brotli_read_bits24(buf: n bytes, n: number, bit_pos: number)
+    requires n < 4294967296
+    returns read_bits24(buf, bit_pos)
+    trace depends on buf, n, bit_pos
+    stack 0
+{
+    let byte_off: u64 := bit_pos >> 3
+    if n < 4 {
+        let one: u64 := 1
+        return (one << 32) - 1
+    }
+    if byte_off > n - 4 {
+        let one: u64 := 1
+        return (one << 32) - 1
+    }
+    let w: u64 := buf.u32(byte_off)
+    let sh: u64 := bit_pos & 7
+    let one: u64 := 1
+    let mask24: u64 := (one << 24) - 1
+    if sh == 0 { return w & mask24 }
+    if sh == 1 { return (w >> 1) & mask24 }
+    if sh == 2 { return (w >> 2) & mask24 }
+    if sh == 3 { return (w >> 3) & mask24 }
+    if sh == 4 { return (w >> 4) & mask24 }
+    if sh == 5 { return (w >> 5) & mask24 }
+    if sh == 6 { return (w >> 6) & mask24 }
+    return (w >> 7) & mask24
+}
+
+// ---------------------------------------------------------------------------
+// 7. RFC 7932 §9.2 Meta-Block Header Decoder
+//    Input `bits`: low 32 bits of the bitstream starting at the meta-block header.
+//    Output packed u64:
+//      bits  0..31: MLEN (0 for EOF/metadata/invalid; 1..16777216 for data)
+//      bits 32..34: kind (0=invalid, 1=compressed, 2=uncompressed, 3=empty_last/EOF, 4=metadata)
+//      bit      35: ISLAST (0 or 1)
+//      bits 40..47: exact header bits consumed (2..29)
+// ---------------------------------------------------------------------------
+def mb_pack(mlen, tag, is_last, consumed) {
+    mlen + tag * 4294967296 + is_last * 34359738368 + consumed * 1099511627776
+}
+
+def mb_data_hdr(body, is_last, base_bits) {
+    if body % 4 == 3 then mb_pack(0, 4, is_last, base_bits + 2)
+    else if body % 4 == 0 then
+        if is_last == 1 then mb_pack(((body / 4) % 65536) + 1, 1, 1, base_bits + 18)
+        else if ((body / 262144) % 2) == 1 then mb_pack(((body / 4) % 65536) + 1, 2, 0, base_bits + 19)
+        else mb_pack(((body / 4) % 65536) + 1, 1, 0, base_bits + 19)
+    else if body % 4 == 1 then
+        if ((body / 262144) % 16) == 0 then 0
+        else if is_last == 1 then mb_pack(((body / 4) % 1048576) + 1, 1, 1, base_bits + 22)
+        else if ((body / 4194304) % 2) == 1 then mb_pack(((body / 4) % 1048576) + 1, 2, 0, base_bits + 23)
+        else mb_pack(((body / 4) % 1048576) + 1, 1, 0, base_bits + 23)
+    else
+        if ((body / 4194304) % 16) == 0 then 0
+        else if is_last == 1 then mb_pack(((body / 4) % 16777216) + 1, 1, 1, base_bits + 26)
+        else if ((body / 67108864) % 2) == 1 then mb_pack(((body / 4) % 16777216) + 1, 2, 0, base_bits + 27)
+        else mb_pack(((body / 4) % 16777216) + 1, 1, 0, base_bits + 27)
+}
+
+def metablock_hdr(bits) {
+    if bits % 2 == 1 then
+        if (bits / 2) % 2 == 1 then mb_pack(0, 3, 1, 2)
+        else mb_data_hdr(bits / 4, 1, 2)
+    else mb_data_hdr(bits / 2, 0, 1)
+}
+
+fn brotli_metablock_hdr(bits: number)
+    requires bits < 4294967296
+    returns metablock_hdr(bits)
+    trace depends on bits
+    stack 0
+{
+    let one: u64 := 1
+    let is_last: u64 := bits & 1
+    if is_last == 1 {
+        if ((bits >> 1) & 1) == 1 {
+            return (3 << 32) + (1 << 35) + (2 << 40)
+        }
+        let body: u64 := bits >> 2
+        let mnib: u64 := body & 3
+        if mnib == 3 { return (4 << 32) + (1 << 35) + (4 << 40) }
+        if mnib == 0 {
+            let mlen: u64 := ((body >> 2) & ((one << 16) - 1)) + 1
+            return mlen + (1 << 32) + (1 << 35) + (20 << 40)
+        }
+        if mnib == 1 {
+            if ((body >> 18) & 15) == 0 { return 0 }
+            let mlen: u64 := ((body >> 2) & ((one << 20) - 1)) + 1
+            return mlen + (1 << 32) + (1 << 35) + (24 << 40)
+        }
+        if ((body >> 22) & 15) == 0 { return 0 }
+        let mlen: u64 := ((body >> 2) & ((one << 24) - 1)) + 1
+        return mlen + (1 << 32) + (1 << 35) + (28 << 40)
+    }
+    let body: u64 := bits >> 1
+    let mnib: u64 := body & 3
+    if mnib == 3 { return (4 << 32) + (3 << 40) }
+    if mnib == 0 {
+        let mlen: u64 := ((body >> 2) & ((one << 16) - 1)) + 1
+        if ((body >> 18) & 1) == 1 {
+            return mlen + (2 << 32) + (20 << 40)
+        }
+        return mlen + (1 << 32) + (20 << 40)
+    }
+    if mnib == 1 {
+        if ((body >> 18) & 15) == 0 { return 0 }
+        let mlen: u64 := ((body >> 2) & ((one << 20) - 1)) + 1
+        if ((body >> 22) & 1) == 1 {
+            return mlen + (2 << 32) + (24 << 40)
+        }
+        return mlen + (1 << 32) + (24 << 40)
+    }
+    if ((body >> 22) & 15) == 0 { return 0 }
+    let mlen: u64 := ((body >> 2) & ((one << 24) - 1)) + 1
+    if ((body >> 26) & 1) == 1 {
+        return mlen + (2 << 32) + (28 << 40)
+    }
+    return mlen + (1 << 32) + (28 << 40)
+}
+
+// ---------------------------------------------------------------------------
+// 8. RFC 7932 §4 Distance Ring-Buffer Short-Code Decoder (`code` in `0..15`)
+//    Returns decoded distance (>= 1), or `0` if subtraction would yield <= 0.
+// ---------------------------------------------------------------------------
+def dist_short(code, d0, d1, d2, d3) {
+    if code == 0 then d0
+    else if code == 1 then d1
+    else if code == 2 then d2
+    else if code == 3 then d3
+    else if code == 4 then (if d0 > 1 then d0 - 1 else 0)
+    else if code == 5 then d0 + 1
+    else if code == 6 then (if d0 > 2 then d0 - 2 else 0)
+    else if code == 7 then d0 + 2
+    else if code == 8 then (if d0 > 3 then d0 - 3 else 0)
+    else if code == 9 then d0 + 3
+    else if code == 10 then (if d1 > 1 then d1 - 1 else 0)
+    else if code == 11 then d1 + 1
+    else if code == 12 then (if d1 > 2 then d1 - 2 else 0)
+    else if code == 13 then d1 + 2
+    else if code == 14 then (if d1 > 3 then d1 - 3 else 0)
+    else d1 + 3
+}
+
+fn brotli_dist_short(code: number, d0: number, d1: number, d2: number, d3: number)
+    requires code < 16
+    requires d0 < 4294967296
+    requires d1 < 4294967296
+    requires d2 < 4294967296
+    requires d3 < 4294967296
+    returns dist_short(code, d0, d1, d2, d3)
+    trace depends on code, d0, d1, d2, d3
+    stack 0
+{
+    if code == 0 { return d0 }
+    if code == 1 { return d1 }
+    if code == 2 { return d2 }
+    if code == 3 { return d3 }
+    if code == 4 { if d0 > 1 { return d0 - 1 } return 0 }
+    if code == 5 { return d0 + 1 }
+    if code == 6 { if d0 > 2 { return d0 - 2 } return 0 }
+    if code == 7 { return d0 + 2 }
+    if code == 8 { if d0 > 3 { return d0 - 3 } return 0 }
+    if code == 9 { return d0 + 3 }
+    if code == 10 { if d1 > 1 { return d1 - 1 } return 0 }
+    if code == 11 { return d1 + 1 }
+    if code == 12 { if d1 > 2 { return d1 - 2 } return 0 }
+    if code == 13 { return d1 + 2 }
+    if code == 14 { if d1 > 3 { return d1 - 3 } return 0 }
+    return d1 + 3
+}
+
+// ---------------------------------------------------------------------------
+// 9. RFC 7932 §9.2 Verified Uncompressed Meta-Block 64-Byte Slot Copy
+//    Copies `n <= 64` literal bytes into a 64-byte output slot and zeroes the tail.
+// ---------------------------------------------------------------------------
+def pad64(src) {
+    [if i < len(src) then src[i] else 0 for i in 0..64]
+}
+
+fn brotli_copy_block64(out: 64 bytes, src: n bytes, n: number)
+    requires no_overlap(out, src)
+    requires n <= 64
+    ensures out = pad64(src)
+    trace depends on n
+    stack 0
+{
+    var i: u64 := 0
+    while i < n
+        maintains i <= n
+        writes out[..i] = pad64(src)
+        decreases n - i
+    {
+        out[i] := src[i]
+        i += 1
+    }
+    while i < 64
+        maintains n <= i
+        maintains i <= 64
+        writes out[..i] = pad64(src)
+        decreases 64 - i
+    {
+        out[i] := 0
+        i += 1
+    }
+}
