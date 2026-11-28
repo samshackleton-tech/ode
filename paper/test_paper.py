@@ -93,6 +93,35 @@ class PaperTests(unittest.TestCase):
                 self.assertIsNotNone(m, r.stdout)
                 self.assertEqual({"instructions": int(m.group(1)), "bytes": int(m.group(2))}, measured[target])
 
+    @unittest.skipUnless(HAVE_VERIFIER, "the verifier (proof-core odeverify) is not built here")
+    def test_quickstart_hl_example_is_dual_verified(self):
+        facts = json.loads(read("paper", "facts.json"))["all_zero"]
+        tool = os.path.join(ROOT, "lang", "ode_tool.py")
+        src = os.path.join(HERE, "examples", "all_zero_hl.ode")
+        with tempfile.TemporaryDirectory() as d:
+            for target, want in (("x86_64", (13, 48)), ("arm64", (13, 52))):
+                obj, proof = os.path.join(d, target + ".o"), os.path.join(d, target + ".proof")
+                r = subprocess.run(
+                    [sys.executable, tool, "pack", src, "--fn", "all_zero", "--c-abi",
+                     "--target", target, "--verifier", "both", "--out", obj, "--proof", proof],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertIn("VERIFIERS:         odeverify (shown), verify2 (shown)", r.stdout)
+                self.assertIn("ode_" + facts["id"], r.stdout)
+                m = re.search(r"\(1 function, (\d+) instructions, (\d+) B, 1 exported symbol, 0 hooks\)", r.stdout)
+                self.assertIsNotNone(m, r.stdout)
+                self.assertEqual((int(m.group(1)), int(m.group(2))), want)
+
+    def test_quickstart_listings_exist(self):
+        self.assertIn("def count_from", read("paper", "EXPERIMENTS", "tasks", "ct_count_spec.ode"))
+        b3 = read("paper", "EXPERIMENTS", "tasks", "blake3_compress1_reference.ode")
+        self.assertIn("inline fn g_half", b3)
+        self.assertIn("\ninline fn perm_x86", b3)
+        cc = read("paper", "EXPERIMENTS", "tasks", "chacha20_4way_reference.ode")
+        self.assertIn("inline fn qr16", cc)
+        self.assertIn("\n// Self-inverse 4x4", cc)
+
 
 if __name__ == "__main__":
     unittest.main()

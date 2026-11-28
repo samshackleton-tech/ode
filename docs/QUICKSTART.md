@@ -50,23 +50,24 @@ Run all commands from the repository root (`python3 lang/ode_tool.py ...`, abbre
 
 ```sh
 # Development: compile, prove, and verify one target
-python3 lang/ode_tool.py check paper/examples/all_zero.ode --target arm64
+python3 lang/ode_tool.py check paper/examples/all_zero_hl.ode --target arm64
 
 # Instant (< 50 ms) register/spill map, exact lowered assembly, and static pipeline sim
-python3 lang/ode_tool.py advise --asm paper/examples/all_zero.ode --target arm64 --all-archs
+python3 lang/ode_tool.py advise --asm paper/examples/all_zero_hl.ode --target arm64 --all-archs
 
 # Release: emit ELF64 object (.o with embedded .ode.ocl) + separate .proof
-# Pass --c-abi when linking against a legacy C or Rust caller
-# Optional: --effort fast (quick interactive stop) or --effort deep / --try-harder
-python3 lang/ode_tool.py pack paper/examples/all_zero.ode --c-abi --target arm64 \
-  --out /tmp/all_zero.o --proof /tmp/all_zero.proof
+# Pass --c-abi when linking against a legacy C or Rust caller; --verifier both runs
+# both Lean odeverify and standalone pure-Python verify2.py
+python3 lang/ode_tool.py pack paper/examples/all_zero_hl.ode --c-abi --target arm64 \
+  --verifier both --out /tmp/all_zero.o --proof /tmp/all_zero.proof
 
 # Audit: verify 100% of .text against an independently expected contract ID
-python3 lang/ode_tool.py audit /tmp/all_zero.o --proof /tmp/all_zero.proof \
+# (pass --verifier verify2 to audit with pure Python alone, without Lean installed)
+python3 lang/ode_tool.py audit /tmp/all_zero.o --proof /tmp/all_zero.proof --verifier both \
   --expect-contract jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika
 ```
 
-The auditor obtains `--expect-contract` independently from the published specification—never from the object file under audit. `ode audit` verifies that 100% of executable bytes in `.text` belong to verified functions, that no external relocations remain, that `.ode.ocl` hashes to the expected 52-character lowercase base-32 BLAKE3 identifier, and that the verifier accepts the `.proof` file for those bytes. An auditor can also run the independent pure-Python verifier `python3 proof-core/verify2.py` on the exact same `.statement` and `.proof` files (covering scalar, byte, word-level, 128-bit SIMD, SHA-NI/SHA2, and 512-bit AVX-512 contracts on both `x86_64` and `arm64`).
+The auditor obtains `--expect-contract` independently from the published specification—never from the object file under audit. `ode audit` verifies that 100% of executable bytes in `.text` belong to verified functions, that no external relocations remain, that `.ode.ocl` hashes to the expected 52-character lowercase base-32 BLAKE3 identifier, and that every requested verifier accepts the `.proof` file for those bytes. Passing `--verifier both` cross-checks the exact same `.statement` and order-independent (`r ...`) `.proof` file with both Lean 4 `odeverify` and standalone pure-Python `proof-core/verify2.py` (which covers scalar, byte, word-level, record, value-array, 128-bit NEON/SSE4.1, 512-bit AVX-512, and all four full multi-function BLAKE3-Servil bundles).
 
 ### The Four Outcomes
 

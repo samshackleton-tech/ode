@@ -59,8 +59,8 @@
   <text x="605" y="117" text-anchor="middle" font-family="Menlo" font-size="7.4" font-weight="normal" font-style="normal" fill="#1C1E21">ode_&lt;52-char-ID&gt;</text>
   <rect x="406" y="138" width="120" height="66" rx="1.5" fill="#FFFFFF" stroke="#5B6470" stroke-width="0.8"/>
   <text x="466" y="155" text-anchor="middle" font-family="Palatino" font-size="8.8" font-weight="bold" font-style="normal" fill="#1C1E21">Instruction Tables</text>
-  <text x="466" y="170" text-anchor="middle" font-family="Menlo" font-size="7.6" font-weight="normal" font-style="normal" fill="#1C1E21">x86.tab (96 rows)</text>
-  <text x="466" y="183" text-anchor="middle" font-family="Menlo" font-size="7.6" font-weight="normal" font-style="normal" fill="#1C1E21">arm64.tab (56 rows)</text>
+  <text x="466" y="170" text-anchor="middle" font-family="Menlo" font-size="7.6" font-weight="normal" font-style="normal" fill="#1C1E21">x86.tab (109 rows)</text>
+  <text x="466" y="183" text-anchor="middle" font-family="Menlo" font-size="7.6" font-weight="normal" font-style="normal" fill="#1C1E21">arm64.tab (67 rows)</text>
   <text x="466" y="197" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="italic" fill="#5B6470">CPU + model checked</text>
   <line x1="466" y1="138" x2="466" y2="126" stroke="#1C1E21" stroke-width="0.85" marker-end="url(#arr-ink)"/>
   <rect x="548" y="138" width="114" height="66" rx="1.5" fill="#FFFFFF" stroke="#2E343D" stroke-width="0.9"/>
