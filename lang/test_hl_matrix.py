@@ -1832,6 +1832,114 @@ fn f_reg_press(a: u64, b: u64, c: u64, d: u64) -> u64
         self.assertIn("stack(x86_64) var", err_x86)
         self.assertNotIn("stack var t:", err_x86)
 
+    def test_18_hl_v10_forensic_regressions(self):
+        """Regression tests for hl-default-v10 forensic fixes:
+        1. Mixed `u32x16` + `u32x4` register allocation on x86-64 never aliases `xmmK` with `zmmK`
+           and never allocates `zmm15` (colliding with `u32x4` scratch `xmm15`).
+        2. Deeply nested balanced vector expressions never silently clobber a live vector scratch
+           register — they refuse loudly with a crisp `too deeply nested` error.
+        3. Multi-line `join maintains` split across newlines after `==` and `,` parses and verifies `shown`.
+        """
+        # 1. Mixed 17 live `u32x16` (`zmm16..30`, `zmm1`, `zmm2`) + live `u32x4` (`xmm3`+, NEVER `xmm1`/`xmm2`!)
+        src_mixed_vec_live = """\
+def sum17(a, b) {
+    let d = [a[i] ^ b[i] for i in 0..16]
+    let p2 = [d[i] + d[i] for i in 0..16]
+    let p4 = [p2[i] + p2[i] for i in 0..16]
+    let p8 = [p4[i] + p4[i] for i in 0..16]
+    let p16 = [p8[i] + p8[i] for i in 0..16]
+    [a[i] + p16[i] for i in 0..16]
+}
+
+fn f_mixed_zmm_xmm(out: 64 bytes, out4: 16 bytes, a: 64 bytes, b: 64 bytes)
+    requires no_overlap(out, out4, a, b)
+    ensures out = bytes_of(sum17(words(a), words(b)))
+    ensures out4 = bytes_of([words(a)[0] ^ words(b)[0], words(a)[1] ^ words(b)[1], words(a)[2] ^ words(b)[2], words(a)[3] ^ words(b)[3]])
+    trace depends on nothing
+for x86_64 needs avx needs avx512 {
+    let z0: u32x16 := a.u32x16(0)
+    let zb: u32x16 := b.u32x16(0)
+    let z1: u32x16 := z0 ^ zb
+    let z2: u32x16 := z0 ^ zb
+    let z3: u32x16 := z0 ^ zb
+    let z4: u32x16 := z0 ^ zb
+    let z5: u32x16 := z0 ^ zb
+    let z6: u32x16 := z0 ^ zb
+    let z7: u32x16 := z0 ^ zb
+    let z8: u32x16 := z0 ^ zb
+    let z9: u32x16 := z0 ^ zb
+    let z10: u32x16 := z0 ^ zb
+    let z11: u32x16 := z0 ^ zb
+    let z12: u32x16 := z0 ^ zb
+    let z13: u32x16 := z0 ^ zb
+    let z14: u32x16 := z0 ^ zb
+    let z15: u32x16 := z0 ^ zb
+    let z16: u32x16 := z0 ^ zb
+    let x0: u32x4 := a.u32x4(0)
+    let x1: u32x4 := b.u32x4(0)
+    out4.u32x4(0) := x0 ^ x1
+    let r1: u32x16 := (z1 +% z2) +% (z3 +% z4)
+    let r2: u32x16 := (z5 +% z6) +% (z7 +% z8)
+    let r3: u32x16 := (z9 +% z10) +% (z11 +% z12)
+    let r4: u32x16 := (z13 +% z14) +% (z15 +% z16)
+    out.u32x16(0) := z0 +% ((r1 +% r2) +% (r3 +% r4))
+}
+"""
+        p_mx = ode_unified.parse_unified(src_mixed_vec_live, src="mixed.ode", c_abi_fn="f_mixed_zmm_xmm")
+        vmap = p_mx["fns_by_name"]["f_mixed_zmm_xmm"]["impls"]["x86_64"]["hl_meta"]["var_map"]
+        by_nm = {nm: reg for nm, _, reg, _ in vmap}
+        zmm_live = {int(by_nm[f"z{i}"][3:]) for i in range(17)}
+        xmm_live = {int(by_nm[f"x{i}"][3:]) for i in range(2)}
+        self.assertNotIn(15, zmm_live, f"zmm15 must not be allocated (clobbers u32x4 scratch xmm15): {vmap}")
+        self.assertEqual(zmm_live & xmm_live, set(), f"simultaneously live xmmK/zmmK bank collision: {vmap}")
+        _pack_and_dual_verify(src_mixed_vec_live, "f_mixed_zmm_xmm", "x86_64", check_v2=False)
+
+        # 2. Deeply nested balanced vector tree refuses cleanly instead of clobbering scratch
+        src_deep_vec = """\
+fn f_deep(out: 16 bytes, a: 16 bytes, b: 16 bytes)
+    requires no_overlap(out, a, b)
+    ensures out = out
+    trace depends on nothing
+{
+    let v0: u32x4 := a.u32x4(0)
+    let v1: u32x4 := b.u32x4(0)
+    out.u32x4(0) := v0 ^ (((v0 ^ v1) ^ (v0 ^ v1)) ^ ((v0 ^ v1) ^ (v0 ^ v1)))
+}
+"""
+        p_dv = ode_unified.parse_unified(src_deep_vec, src="deep.ode", c_abi_fn="f_deep")
+        for arch in ("x86_64", "arm64"):
+            err = p_dv["fns_by_name"]["f_deep"]["impls"][arch].get("hl_err") or ""
+            self.assertIn("too deeply nested", err, f"{arch} should refuse deep nested vec expr, got: {err!r}")
+
+        # 2. Multi-line `join maintains` split after `==` and `,`
+        src_ml_join = """\
+def dbl(x) {
+    if x < 10 then x + x else x + 10
+}
+
+fn f_ml_join(x: number)
+    requires x <= 100
+    returns dbl(x)
+    trace depends on x
+    stack 0
+{
+    var r: u64 := 0
+    if x < 10 {
+        r := x + x
+    } else {
+        r := x + 10
+    }
+    join maintains
+        r ==
+            dbl(x),
+        0 <= r,
+        r <= 200
+    return r
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_ml_join, "f_ml_join", arch, check_v2=True)
+
 
 if __name__ == "__main__":
     unittest.main()

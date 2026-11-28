@@ -1,0 +1,30 @@
+{
+  "id": "hl-default-v11",
+  "description": "Iteration 11 cold-room benchmark (4 models x 8 tasks x 2 targets = 64 cells) after hl-default-v10 forensic fixes: fix x86-64 `xmmK`/`zmmK` physical bank aliasing and `zmm15` scratch conflict in mixed `u32x4`+`u32x16` functions, support multi-line `join maintains` continuations after binary operators, and document/hint adding `returns <spec_expr>` on multi-select `inline fn`s to trigger automatic `join` path-merging.",
+  "models": [
+    "moonshotai/kimi-k3.1-pro",
+    "meta/muse-spark-open",
+    "z-ai/glm-5.3-prime",
+    "anthropic/claude-haiku-5.5"
+  ],
+  "tasks": [
+    "ct_base64_decode",
+    "der_valid",
+    "ipv4_valid",
+    "ebpf",
+    "chacha20_4way",
+    "sha256_4way",
+    "blake3_compress1",
+    "blake3_compress_4way"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "perf_arms": "ode",
+  "max_rounds": 7,
+  "opt_rounds": 0,
+  "max_truncations": 2,
+  "max_tokens": 16384,
+  "max_usd": 30
+}

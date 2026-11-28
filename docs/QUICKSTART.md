@@ -203,7 +203,7 @@ inline fn mix_step(var a: u32x4, var b: u32x4, c: u32x4) {
 }
 ```
 
-At each call site `mix_step(v0, v1, m0)`, `var` parameters alias the caller's live variables directly (zero copies, zero stack slots), `const` parameters fold at compile time (eliminating dead `if` branches and unrolling `for ... unroll` loops), value parameters bind fresh hygienic locals, and the expanded code is verified in place alongside the caller.
+At each call site `mix_step(v0, v1, m0)`, `var` parameters alias the caller's live variables directly (zero copies, zero stack slots), `const` parameters fold at compile time (eliminating dead `if` branches and unrolling `for ... unroll` loops), value parameters bind fresh hygienic locals, and the expanded code is verified in place alongside the caller. If an `inline fn` contains multiple `select`s or branches and is called several times in a loop (for example, a per-byte decoder called 4 times per iteration), add `returns <spec_expr>` to that `inline fn` (triggering an automatic `join` merge after each call) or make it a separate `fn` with its own `returns` contract so symbolic paths stay linear instead of multiplying exponentially.
 
 Ordinary, auditable helper modules live in `std/` and carry zero special compiler privilege — import them by their 52-character BLAKE3-256 digest (`ode hash std/*.ode`) with `--store std`:
 

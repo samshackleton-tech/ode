@@ -1169,7 +1169,8 @@ def _raise_pack_proof_error(exc, stmt_path, proof_path, inv_rename, compiled_by_
             f"NOTE: fast-fail prover stopped early {q_str}{split_msg} instead of searching blindly.\n"
             f"What did you mean here, and how should I prove this step?\n"
             f"  1. If the code or loop invariant needs help: add the missing bound/equation to `maintains`, "
-            f"insert a `join maintains ...` merge point, or factor repeated checks into a small helper `fn`.\n"
+            f"insert a `join maintains ...` merge point, add `returns <spec_expr>` to a multi-select `inline fn` "
+            f"(triggering automatic `join` merging), or factor repeated checks into a small helper `fn`.\n"
             f"  2. If you believe this exact source code is already correct, tell the prover to try harder "
             f"without changing your code: run `ode pack --effort deep` (or `--try-harder`; in interactive sessions reply `TRY_HARDER`)."
         )
@@ -1182,6 +1183,7 @@ def _raise_pack_proof_error(exc, stmt_path, proof_path, inv_rename, compiled_by_
         extra_note = (
             f"NOTE: prover {q_str}{split_msg}. "
             f"Too many sequential `select`/branch splits in one function cause exponential symbolic path explosion; "
+            f"add `returns <spec_expr>` on a repeated `inline fn` (to merge paths automatically via `join`), "
             f"factor repeated per-element checks into a small helper `fn` with its own `returns`/`ensures` contract "
             f"(Ode's fast calling convention keeps helper calls cheap), or insert a `join maintains ...` merge point."
         )

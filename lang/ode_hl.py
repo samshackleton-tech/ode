@@ -371,6 +371,7 @@ class HLParser:
         start_line = self.cur().line
         prev_line = start_line
         stmt_kws = {"let", "var", "buf", "if", "while", "for", "return", "break", "continue", "join", "}"}
+        cont_ops = {"==", "!=", "<", "<=", ">", ">=", "+", "-", "*", "/", "%", "&&", "||", "="}
         while not self.peek(kind="eof"):
             t = self.cur()
             if pdepth == 0 and bdepth == 0:
@@ -382,7 +383,13 @@ class HLParser:
                     break
                 if t.val == ";" and "SEMI" in stop_words:
                     break
-                if stop_on_stmt and parts and t.line > prev_line and (t.val in stmt_kws or t.kind == "id"):
+                if (
+                    stop_on_stmt
+                    and parts
+                    and t.line > prev_line
+                    and parts[-1] not in cont_ops
+                    and (t.val in stmt_kws or t.kind == "id")
+                ):
                     break
             if t.val == "(":
                 pdepth += 1
@@ -661,8 +668,7 @@ class HLParser:
         if t.val == "select":
             raise HLErr(
                 f"{self.src}: line {t.line}: `select(...)` is an expression, not a statement "
-                f"(bind it with `let x := select(...)`, `x := select(...)`, or `return select(...)`; "
-                f"`inline fn` templates do not return values — pass a `var out: u64` parameter or use a contract-bearing `fn`)"
+                f"(bind it with `let x := select(...)`, `x := select(...)`, or `return select(...)`)"
             )
         raise HLErr(f"{self.src}: line {t.line}: unexpected token {t.val!r} at start of statement")
 
@@ -2403,6 +2409,7 @@ class HLLower:
         self.stmts = _alpha_rename_blocks(expanded, self.param_names)
         self.stmts, self.const_vals = _fold_const_lets(self.stmts, arch=self.arch)
         self._live_temps = {}  # reg -> description of held temporary value
+        self._vec_scratch_held = set()  # live vector scratch registers (never silently clobbered)
         (self.locals_order, self.local_types, self.stack_vars, self.bufs,
          self.has_calls, self.live_across_call, self.var_crossed_calls) = _analyze_calls_and_vars(
             self.stmts, self.param_names, self.fn_names, self_name=fn_name, arch=self.arch
@@ -2578,7 +2585,8 @@ class HLLower:
         vec4_pool_all = ([f"v{k}" for k in range(0, 8)] + [f"v{k}" for k in range(16, 30)]
                          if self.arch == "arm64"
                          else [f"xmm{k}" for k in range(1, 15)])
-        vec16_pool_all = [f"zmm{k}" for k in range(16, 31)] + [f"zmm{k}" for k in range(1, 16)]
+        # Exclude `zmm15` so `u32x4` scratch (`xmm15`) can never clobber a live `u32x16` register.
+        vec16_pool_all = [f"zmm{k}" for k in range(16, 31)] + [f"zmm{k}" for k in range(1, 15)]
 
         # 1. Assign parameters: pass-through params preserved by their crossed callees stay in-place (zero copy/push!)
         param_regs = set()
@@ -2773,11 +2781,17 @@ class HLLower:
                     off += sz
                 continue
 
-            forbidden = {
-                self.var_loc[nb][1]
-                for nb in interf.get(nm, ())
-                if nb in self.var_loc and self.var_loc[nb][0] == "reg"
-            }
+            forbidden = set()
+            for nb in interf.get(nm, ()):
+                if nb in self.var_loc and self.var_loc[nb][0] == "reg":
+                    r = self.var_loc[nb][1]
+                    forbidden.add(r)
+                    # On x86-64, `xmmK` and `zmmK` alias the same physical vector register
+                    # (a 128-bit VEX write to `xmmK` zeroes bits 128..511 of `zmmK`).
+                    if r.startswith("xmm") and r[3:].isdigit():
+                        forbidden.add("zmm" + r[3:])
+                    elif r.startswith("zmm") and r[3:].isdigit():
+                        forbidden.add("xmm" + r[3:])
 
             if ty in ("u64", "u8"):
                 # Exact per-variable call clobbers: use call-safe caller-saved regs FIRST (0 pushes!), then callee-saved!
@@ -3795,24 +3809,52 @@ class HLLower:
             self.emit(call.line, f"mov {dst}, {ret_reg}")
 
     # -- Vector Lowering (`u32x4` and `u32x16`) --
-    def _vec_scratch(self, ty, idx=0):
+    def _vec_scratch_pool(self, ty):
         if ty == "u32x16":
-            return ("zmm0", "zmm31")[idx & 1]
-        return ("v31", "v30")[idx & 1] if self.arch == "arm64" else ("xmm0", "xmm15")[idx & 1]
+            return ("zmm0", "zmm31")
+        return ("v31", "v30") if self.arch == "arm64" else ("xmm0", "xmm15")
 
-    def _as_vec_reg(self, e, ty, s_idx=0):
+    def _vec_scratch(self, ty, idx=0):
+        return self._vec_scratch_pool(ty)[idx & 1]
+
+    @contextlib.contextmanager
+    def _protect_vec(self, reg):
+        added = reg not in self._vec_scratch_held
+        if added:
+            self._vec_scratch_held.add(reg)
+        try:
+            yield reg
+        finally:
+            if added:
+                self._vec_scratch_held.discard(reg)
+
+    @contextlib.contextmanager
+    def _hold_vec_expr(self, e, ty, line=0, avoid=()):
+        """Yield a register holding vector expr `e` (zero-copy if already in a named register),
+        protecting any allocated vector scratch register in `_vec_scratch_held` so nested
+        subexpressions can never silently clobber it."""
         if isinstance(e, Var) and e.name in self.var_loc:
             vty = self.var_ty.get(e.name)
             if vty != ty:
                 raise HLErr(
-                    f"{self.src}: line {getattr(e, 'line', 0)}: vector width mismatch: `{e.name}` has type `{vty}` "
+                    f"{self.src}: line {getattr(e, 'line', line)}: vector width mismatch: `{e.name}` has type `{vty}` "
                     f"where `{ty}` is required (128-bit `u32x4` and 512-bit `u32x16` cannot be mixed)"
                 )
             if self.var_loc[e.name][0] == "reg":
-                return self.var_loc[e.name][1]
-        vr = self._vec_scratch(ty, s_idx)
-        self._eval_vec(e, vr, ty, s_idx)
-        return vr
+                reg = self.var_loc[e.name][1]
+                if reg not in avoid:
+                    yield reg
+                    return
+        pool = self._vec_scratch_pool(ty)
+        vr = next((r for r in pool if r not in self._vec_scratch_held and r not in avoid), None)
+        if vr is None:
+            raise HLErr(
+                f"{self.src}: line {getattr(e, 'line', line)}: vector expression too deeply nested for 2 scratch "
+                f"registers ({', '.join(pool)}); bind an intermediate subexpression with `let tmp: {ty} := ...`"
+            )
+        self._eval_vec(e, vr, ty)
+        with self._protect_vec(vr):
+            yield vr
 
     def _vec_expr_uses_reg(self, e, reg):
         if isinstance(e, Var):
@@ -3876,39 +3918,48 @@ class HLLower:
                     mn = "ushr" if e.op == ">>" else "shl"
                     self.emit(line, f"{mn} {dst}.4s, {sr}.4s, {k}")
                 return
+            def _emit_vec_binop(lr, rr):
+                if ty == "u32x16":
+                    if e.op in ("+", "+%"):
+                        self.emit(line, f"vpaddd {dst}, {lr}, {rr}")
+                    elif e.op == "^":
+                        self.emit(line, f"vpxord {dst}, {lr}, {rr}")
+                    else:
+                        raise HLErr(f"{self.src}: line {line}: unsupported u32x16 op `{e.op}`")
+                elif self.arch == "x86_64":
+                    xor_mn = "vpxord" if "avx512" in self.needs else "vpxor"
+                    op_map = {"+": "vpaddd", "+%": "vpaddd", "^": xor_mn, "&": "vpand", "|": "vpor"}
+                    if e.op not in op_map:
+                        raise HLErr(f"{self.src}: line {line}: unsupported u32x4 op `{e.op}`")
+                    self.emit(line, f"{op_map[e.op]} {dst}, {lr}, {rr}")
+                else:
+                    if e.op in ("+", "+%"):
+                        self.emit(line, f"add {dst}.4s, {lr}.4s, {rr}.4s")
+                    elif e.op == "^":
+                        self.emit(line, f"eor {dst}.16b, {lr}.16b, {rr}.16b")
+                    elif e.op == "&":
+                        self.emit(line, f"and {dst}.16b, {lr}.16b, {rr}.16b")
+                    elif e.op == "|":
+                        self.emit(line, f"orr {dst}.16b, {lr}.16b, {rr}.16b")
+                    else:
+                        raise HLErr(f"{self.src}: line {line}: unsupported u32x4 op `{e.op}`")
+
+            # Use `dst` directly for a compound operand when safe (saving 1 scratch register),
+            # and protect it in `_vec_scratch_held` if `dst` itself is a scratch register!
             if not isinstance(e.left, Var) and not self._vec_expr_uses_reg(e.right, dst):
                 self._eval_vec(e.left, dst, ty, s_idx)
-                lr = dst
+                with self._protect_vec(dst) if dst in self._vec_scratch_pool(ty) else contextlib.nullcontext():
+                    with self._hold_vec_expr(e.right, ty, line) as rr:
+                        _emit_vec_binop(dst, rr)
+            elif not isinstance(e.right, Var) and not self._vec_expr_uses_reg(e.left, dst):
+                self._eval_vec(e.right, dst, ty, s_idx)
+                with self._protect_vec(dst) if dst in self._vec_scratch_pool(ty) else contextlib.nullcontext():
+                    with self._hold_vec_expr(e.left, ty, line) as lr:
+                        _emit_vec_binop(lr, dst)
             else:
-                lr = self._as_vec_reg(e.left, ty, s_idx)
-            nxt = 1 - (s_idx & 1)
-            if self._vec_scratch(ty, nxt) == lr:
-                nxt = 1 - nxt
-            rr = self._as_vec_reg(e.right, ty, nxt)
-            if ty == "u32x16":
-                if e.op in ("+", "+%"):
-                    self.emit(line, f"vpaddd {dst}, {lr}, {rr}")
-                elif e.op == "^":
-                    self.emit(line, f"vpxord {dst}, {lr}, {rr}")
-                else:
-                    raise HLErr(f"{self.src}: line {line}: unsupported u32x16 op `{e.op}`")
-            elif self.arch == "x86_64":
-                xor_mn = "vpxord" if "avx512" in self.needs else "vpxor"
-                op_map = {"+": "vpaddd", "+%": "vpaddd", "^": xor_mn, "&": "vpand", "|": "vpor"}
-                if e.op not in op_map:
-                    raise HLErr(f"{self.src}: line {line}: unsupported u32x4 op `{e.op}`")
-                self.emit(line, f"{op_map[e.op]} {dst}, {lr}, {rr}")
-            else:
-                if e.op in ("+", "+%"):
-                    self.emit(line, f"add {dst}.4s, {lr}.4s, {rr}.4s")
-                elif e.op == "^":
-                    self.emit(line, f"eor {dst}.16b, {lr}.16b, {rr}.16b")
-                elif e.op == "&":
-                    self.emit(line, f"and {dst}.16b, {lr}.16b, {rr}.16b")
-                elif e.op == "|":
-                    self.emit(line, f"orr {dst}.16b, {lr}.16b, {rr}.16b")
-                else:
-                    raise HLErr(f"{self.src}: line {line}: unsupported u32x4 op `{e.op}`")
+                with self._hold_vec_expr(e.left, ty, line) as lr:
+                    with self._hold_vec_expr(e.right, ty, line) as rr:
+                        _emit_vec_binop(lr, rr)
             return
         if isinstance(e, Call):
             nm, args = e.name, e.args
@@ -3970,16 +4021,16 @@ class HLLower:
                     raise HLErr(f"{self.src}: line {line}: `rev32_16` (`rev32.8h`) is `arm64` NEON only")
                 if ty != "u32x4" or len(args) != 1:
                     raise HLErr(f"{self.src}: line {line}: `rev32_16(v)` takes 1 `u32x4` argument")
-                sr = self._as_vec_reg(args[0], ty, s_idx)
-                self.emit(line, f"rev32 {dst}.8h, {sr}.8h")
+                with self._hold_vec_expr(args[0], ty, line) as sr:
+                    self.emit(line, f"rev32 {dst}.8h, {sr}.8h")
                 return
             if nm == "vprord":
                 if self.arch != "x86_64":
                     raise HLErr(f"{self.src}: line {line}: `vprord` (AVX-512) is `x86_64` only")
                 if len(args) != 2 or not isinstance(args[1], Num) or not (0 <= args[1].val < 32):
                     raise HLErr(f"{self.src}: line {line}: `vprord(v, k)` requires a constant shift `0 <= k < 32`")
-                sr = self._as_vec_reg(args[0], ty, s_idx)
-                self.emit(line, f"vprord {dst}, {sr}, {args[1].val}")
+                with self._hold_vec_expr(args[0], ty, line) as sr:
+                    self.emit(line, f"vprord {dst}, {sr}, {args[1].val}")
                 return
             if nm in ("shl32", "shr32"):
                 op = "<<" if nm == "shl32" else ">>"
@@ -3990,10 +4041,13 @@ class HLLower:
             if nm == "shufi32x4":
                 if self.arch != "x86_64":
                     raise HLErr(f"{self.src}: line {line}: `shufi32x4` (AVX-512) is only supported on `x86_64`")
-                a = self._as_vec_reg(args[0], ty, s_idx)
-                b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1)) if len(args) == 3 else a
                 imm = args[-1].val
-                self.emit(line, f"vshufi32x4 {dst}, {a}, {b}, {imm}")
+                with self._hold_vec_expr(args[0], ty, line) as a:
+                    if len(args) == 3:
+                        with self._hold_vec_expr(args[1], ty, line) as b:
+                            self.emit(line, f"vshufi32x4 {dst}, {a}, {b}, {imm}")
+                    else:
+                        self.emit(line, f"vshufi32x4 {dst}, {a}, {a}, {imm}")
                 return
             if nm == "shuf32":
                 if self.arch != "x86_64":
@@ -4009,9 +4063,9 @@ class HLLower:
                     )
                 if len(args) != 2 or not isinstance(args[1], Num):
                     raise HLErr(f"{self.src}: line {line}: `shuf32(vec, imm)` requires a constant 8-bit lane mask")
-                a = self._as_vec_reg(args[0], ty, s_idx)
                 imm = args[1].val & 0xFF
-                self.emit(line, f"vpshufd {dst}, {a}, {imm}")
+                with self._hold_vec_expr(args[0], ty, line) as a:
+                    self.emit(line, f"vpshufd {dst}, {a}, {imm}")
                 return
             if nm == "shufps":
                 if self.arch != "x86_64":
@@ -4021,10 +4075,10 @@ class HLLower:
                         f"{self.src}: line {line}: `shufps` operates on 128-bit `u32x4` vectors, not `{ty}` "
                         f"(for 512-bit AVX-512 `u32x16` use `unpacklo32`/`unpackhi32`/`unpacklo64`/`unpackhi64` or `shufi32x4`)"
                     )
-                a = self._as_vec_reg(args[0], ty, s_idx)
-                b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
                 imm = args[2].val
-                self.emit(line, f"vshufps {dst}, {a}, {b}, {imm}")
+                with self._hold_vec_expr(args[0], ty, line) as a:
+                    with self._hold_vec_expr(args[1], ty, line) as b:
+                        self.emit(line, f"vshufps {dst}, {a}, {b}, {imm}")
                 return
             if nm == "blend32":
                 if self.arch != "x86_64":
@@ -4034,10 +4088,10 @@ class HLLower:
                         f"{self.src}: line {line}: `blend32` operates on 128-bit `u32x4` vectors, not `{ty}` "
                         f"(for 512-bit AVX-512 `u32x16` use `unpacklo32`/`unpackhi32`/`unpacklo64`/`unpackhi64` or `shufi32x4`)"
                     )
-                a = self._as_vec_reg(args[0], ty, s_idx)
-                b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
                 imm = args[2].val
-                self.emit(line, f"vpblendd {dst}, {a}, {b}, {imm}")
+                with self._hold_vec_expr(args[0], ty, line) as a:
+                    with self._hold_vec_expr(args[1], ty, line) as b:
+                        self.emit(line, f"vpblendd {dst}, {a}, {b}, {imm}")
                 return
             if nm in ("uzp1_32", "uzp2_32"):
                 if ty != "u32x4":
@@ -4045,14 +4099,14 @@ class HLLower:
                         f"{self.src}: line {line}: `{nm}` operates on 128-bit `u32x4` vectors, not `{ty}` "
                         f"(for 512-bit AVX-512 `u32x16` use `unpacklo32`/`unpackhi32`/`unpacklo64`/`unpackhi64` or `shufi32x4`)"
                     )
-                a = self._as_vec_reg(args[0], ty, s_idx)
-                b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
-                if self.arch == "arm64":
-                    mn = "uzp1" if nm == "uzp1_32" else "uzp2"
-                    self.emit(line, f"{mn} {dst}.4s, {a}.4s, {b}.4s")
-                else:
-                    imm = 136 if nm == "uzp1_32" else 221
-                    self.emit(line, f"vshufps {dst}, {a}, {b}, {imm}")
+                with self._hold_vec_expr(args[0], ty, line) as a:
+                    with self._hold_vec_expr(args[1], ty, line) as b:
+                        if self.arch == "arm64":
+                            mn = "uzp1" if nm == "uzp1_32" else "uzp2"
+                            self.emit(line, f"{mn} {dst}.4s, {a}.4s, {b}.4s")
+                        else:
+                            imm = 136 if nm == "uzp1_32" else 221
+                            self.emit(line, f"vshufps {dst}, {a}, {b}, {imm}")
                 return
             if nm in ("ext4", "ext8", "ext12"):
                 if ty != "u32x4":
@@ -4061,35 +4115,35 @@ class HLLower:
                         f"(for 512-bit AVX-512 `u32x16` use `unpacklo32`/`unpackhi32`/`unpacklo64`/`unpackhi64` or `shufi32x4`)"
                     )
                 k = int(nm[3:])
-                a = self._as_vec_reg(args[0], ty, s_idx)
-                b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
-                if self.arch == "arm64":
-                    self.emit(line, f"ext {dst}.16b, {a}.16b, {b}.16b, {k}")
-                else:
-                    self.emit(line, f"vpalignr {dst}, {b}, {a}, {k}")
+                with self._hold_vec_expr(args[0], ty, line) as a:
+                    with self._hold_vec_expr(args[1], ty, line) as b:
+                        if self.arch == "arm64":
+                            self.emit(line, f"ext {dst}.16b, {a}.16b, {b}.16b, {k}")
+                        else:
+                            self.emit(line, f"vpalignr {dst}, {b}, {a}, {k}")
                 return
             if nm in ("unpacklo32", "unpackhi32", "unpacklo64", "unpackhi64"):
-                a = self._as_vec_reg(args[0], ty, s_idx)
-                b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
-                if self.arch == "arm64":
-                    mn, suf = {
-                        "unpacklo32": ("zip1", "4s"), "unpackhi32": ("zip2", "4s"),
-                        "unpacklo64": ("zip1", "2d"), "unpackhi64": ("zip2", "2d"),
-                    }[nm]
-                    self.emit(line, f"{mn} {dst}.{suf}, {a}.{suf}, {b}.{suf}")
-                elif nm == "unpackhi64" and ty == "u32x4":
-                    # `x86.tab` has `vshufps xmm` (`0xEE` = lanes(a.2, a.3, b.2, b.3)); `vpunpckhqdq` is ZMM-only.
-                    self.emit(line, f"vshufps {dst}, {a}, {b}, 238")
-                else:
-                    mn = {"unpacklo32": "vpunpckldq", "unpackhi32": "vpunpckhdq",
-                          "unpacklo64": "vpunpcklqdq", "unpackhi64": "vpunpckhqdq"}[nm]
-                    self.emit(line, f"{mn} {dst}, {a}, {b}")
+                with self._hold_vec_expr(args[0], ty, line) as a:
+                    with self._hold_vec_expr(args[1], ty, line) as b:
+                        if self.arch == "arm64":
+                            mn, suf = {
+                                "unpacklo32": ("zip1", "4s"), "unpackhi32": ("zip2", "4s"),
+                                "unpacklo64": ("zip1", "2d"), "unpackhi64": ("zip2", "2d"),
+                            }[nm]
+                            self.emit(line, f"{mn} {dst}.{suf}, {a}.{suf}, {b}.{suf}")
+                        elif nm == "unpackhi64" and ty == "u32x4":
+                            # `x86.tab` has `vshufps xmm` (`0xEE` = lanes(a.2, a.3, b.2, b.3)); `vpunpckhqdq` is ZMM-only.
+                            self.emit(line, f"vshufps {dst}, {a}, {b}, 238")
+                        else:
+                            mn = {"unpacklo32": "vpunpckldq", "unpackhi32": "vpunpckhdq",
+                                  "unpacklo64": "vpunpcklqdq", "unpackhi64": "vpunpckhqdq"}[nm]
+                            self.emit(line, f"{mn} {dst}, {a}, {b}")
                 return
             if nm == "add_u32x16_data":
                 if self.arch != "x86_64":
                     raise HLErr(f"{self.src}: line {line}: `add_u32x16_data` (AVX-512) is only supported on `x86_64`")
-                a = self._as_vec_reg(args[0], ty, s_idx)
-                self.emit(line, f"vpaddd {dst}, {a}, zmmword ptr [rip + #{args[1].name}]")
+                with self._hold_vec_expr(args[0], ty, line) as a:
+                    self.emit(line, f"vpaddd {dst}, {a}, zmmword ptr [rip + #{args[1].name}]")
                 return
             raise HLErr(
                 f"{self.src}: line {line}: unknown vector intrinsic `{nm}` "
@@ -4379,17 +4433,17 @@ class HLLower:
             if st.width in ("u32x4", "u32x16"):
                 if st.width == "u32x16" and self.arch != "x86_64":
                     raise HLErr(f"{self.src}: line {st.line}: `u32x16` store (AVX-512) is only supported on `x86_64`; use `u32x4` on `arm64`")
-                vr = self._as_vec_reg(st.expr, st.width)
-                with self._emit_addr_held(st.line, st.buf, st.idx, align_req=(16 if st.width == "u32x4" else 1)) as (base, disp):
-                    if st.width == "u32x4":
-                        if self.arch == "x86_64":
-                            d_str = f" + {disp}" if disp else ""
-                            self.emit(st.line, f"vmovdqu [{base}{d_str}], {vr}")
+                with self._hold_vec_expr(st.expr, st.width, st.line) as vr:
+                    with self._emit_addr_held(st.line, st.buf, st.idx, align_req=(16 if st.width == "u32x4" else 1)) as (base, disp):
+                        if st.width == "u32x4":
+                            if self.arch == "x86_64":
+                                d_str = f" + {disp}" if disp else ""
+                                self.emit(st.line, f"vmovdqu [{base}{d_str}], {vr}")
+                            else:
+                                self.emit(st.line, f"str q{vr[1:]}, [{base}, {disp}]")
                         else:
-                            self.emit(st.line, f"str q{vr[1:]}, [{base}, {disp}]")
-                    else:
-                        d_str = f" + {disp}" if disp else ""
-                        self.emit(st.line, f"vmovdqu32 [{base}{d_str}], {vr}")
+                            d_str = f" + {disp}" if disp else ""
+                            self.emit(st.line, f"vmovdqu32 [{base}{d_str}], {vr}")
                 return
             if st.width == "u32":
                 raise HLErr(
